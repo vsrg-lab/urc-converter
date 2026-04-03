@@ -2,6 +2,7 @@
 
 open System
 open FParsec
+open FsToolkit.ErrorHandling
 open UrcConverter.Parser.Osu.Internal.Models
 
 type private RawSection = { Name: string; Lines: string list }
@@ -12,52 +13,47 @@ let private pBom: Parser<unit, unit> =
     optional (pchar '\uFEFF') >>% ()
 
 let private pFormatHeader: Parser<int, unit> =
-    pBom
-    >>. skipMany (anyOf " \t")
-    >>. pstring "osu file format v" >>. pint32
-    .>> skipRestOfLine true
+    pBom >>. spaces >>. pstring "osu file format v" >>. pint32 .>> skipRestOfLine true
 
-let private pBlankLine: Parser<unit, unit> =
-    skipMany (anyOf " \t") >>. skipNewline
-
-let private pComment: Parser<unit, unit> =
-    skipMany (anyOf " \t") >>. pstring "//" 
-    >>. skipRestOfLine true
+let private pBlankOrComment: Parser<unit, unit> =
+    skipMany (anyOf " \t")
+    >>. (skipNewline <|> (pstring "//" >>. skipRestOfLine true))
 
 let private pSkipFluff: Parser<unit, unit> =
-    skipMany (attempt pBlankLine <|> attempt pComment)
+    skipMany (attempt pBlankOrComment)
 
 let private pSectionName: Parser<string, unit> =
-    pchar '[' >>. manySatisfy ((<>) ']') .>> pchar ']' 
-    .>> skipRestOfLine true
+    pchar '[' >>. manySatisfy ((<>) ']') .>> pchar ']' .>> skipRestOfLine true
 
 let private pContentLine: Parser<string, unit> =
-    notFollowedBy (pchar '[')
-    >>. restOfLine true
+    notFollowedBy (pchar '[') >>. restOfLine true
+
+let private isContentLine (s: string) =
+    let t = s.Trim()
+    t.Length > 0 && not (t.StartsWith "//")
 
 let private pSection: Parser<RawSection, unit> =
     pSectionName .>> pSkipFluff
     .>>. many (attempt (pContentLine .>> pSkipFluff))
     |>> fun (name, lines) ->
-        {
-            Name = name
-            Lines =
-                lines
-                |> List.filter (fun s ->
-                    let t = s.Trim()
-                    t.Length > 0 && not (t.StartsWith "//" ))
-        }
+        { Name = name; Lines = lines |> List.filter isContentLine }
 
 let private pOsuFile: Parser<int * RawSection list, unit> =
-    pSkipFluff
-    >>. pFormatHeader
-    .>> pSkipFluff
+    pSkipFluff >>. pFormatHeader .>> pSkipFluff
     .>>. many (pSection .>> pSkipFluff)
     .>> eof
 
 // #endregion
 
 // #region Parse section contents
+
+// Helpers
+let private pComma: Parser<unit, unit> = pchar ',' >>% ()
+let private pCsvFloat: Parser<float, unit> = pfloat .>> optional pComma
+let private pCsvInt: Parser<int, unit> = pint32 .>> optional pComma
+
+let private pSkipField: Parser<unit, unit> =
+    skipManySatisfy (fun c -> c <> ',' && c <> '\r' && c <> '\n') >>. optional pComma
 
 // Key-Value sections
 let private parseKeyValue (line: string): (string * string) option =
@@ -69,17 +65,6 @@ let private toKvMap (lines: string list): Map<string, string> =
     lines |> List.choose parseKeyValue |> Map.ofList
 
 // Line sections
-let private pComma: Parser<unit, unit> = pchar ',' >>% ()
-
-let private pCsvFloat: Parser<float, unit> =
-    pfloat .>> optional pComma
-
-let private pCsvInt: Parser<int, unit> =
-    pint32 .>> optional pComma
-
-let private pSkipField: Parser<unit, unit> =
-    skipManySatisfy (fun c -> c <> ',' && c <> '\r' && c <> '\n')
-    >>. optional pComma
     
 // TimingPoint
 // Format: time, beatLength, meter, sampleSet, sampleIndex, volume, uninherited, effects
