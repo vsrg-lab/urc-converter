@@ -1,9 +1,10 @@
 ﻿module internal UrcConverter.Parser.Osu.Conversion
 
 open System
-open UrcConverter.Parser.Osu.Internal.Models
+open UrcConverter.Core
 open UrcConverter.Core.Models
 open UrcConverter.Core.Models.Enums
+open UrcConverter.Parser.Osu.Internal.Models
 
 // #region Helpers
 
@@ -124,7 +125,7 @@ let toUrc (chart: OsuChart): UrcChart =
         |> Array.ofList
 
     UrcChart(
-        FormatVersion   = "1.1",
+        FormatVersion   = UrcFormat.Version,
         Metadata        = metadata,
         Layout          = layout,
         Timings         = timings,

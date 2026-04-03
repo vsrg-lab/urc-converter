@@ -1,4 +1,5 @@
 <Solution>
   <Project Path="UrcConverter.Core/UrcConverter.Core.csproj" />
   <Project Path="UrcConverter.Parser.Osu/UrcConverter.Parser.Osu.fsproj" Id="470c5dba-c64c-4e20-a0e5-07eb7c9a72ed" />
+  <Project Path="UrcConverter.Tests/UrcConverter.Tests.csproj" Id="c1dacf1f-b147-4be2-8453-4823a45ef541" />
 </Solution>
