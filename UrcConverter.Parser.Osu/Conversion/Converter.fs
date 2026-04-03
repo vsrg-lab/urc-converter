@@ -1,7 +1,6 @@
 ﻿module internal UrcConverter.Parser.Osu.Conversion
 
 open System
-open System.Collections.Generic
 open UrcConverter.Parser.Osu.Internal.Models
 open UrcConverter.Core.Models
 open UrcConverter.Core.Models.Enums
@@ -24,16 +23,28 @@ let private preferUnicode unicode ascii =
 let private convertTimingPoints (osuTps: OsuTimingPoint list): UrcTiming array =
     let sorted = osuTps |> List.sortBy (fun tp -> tp.Time)
 
-    sorted
+    let groups =
+        sorted
+        |> List.groupBy (fun tp -> tp.Time)
+        |> List.map (fun (time, tps) ->
+            let bpmChange = tps |> List.tryFind (fun tp -> tp.Uninherited)
+            let svChange = tps |> List.tryFind (fun tp -> not tp.Uninherited)
+            (time, bpmChange, svChange))
+
+    groups
     |> List.mapFold
-        (fun (prevBpm, prevMeter) tp ->
-            if tp.Uninherited then
-                let bpm = 60000.0 / tp.BeatLength
-                let meter = $"{tp.Meter}/4"
-                UrcTiming(tp.Time, bpm, meter, 1.0), (bpm, meter)
-            else
-                let sv = clamp 0.1 10.0 (-100.0 / tp.BeatLength)
-                UrcTiming(tp.Time, prevBpm, prevMeter, sv), (prevBpm, prevMeter))
+        (fun (prevBpm, prevMeter) (time, bpmChange, svChange) ->
+            let bpm, meter =
+                match bpmChange with
+                | Some r    -> 60000.0 / r.BeatLength, $"{r.Meter}/4"
+                | None      -> prevBpm, prevMeter
+
+            let sv =
+                match svChange with
+                | Some g    -> clamp 0.1 10.0 (-100.0 / g.BeatLength)
+                | None      -> 1.0
+
+            UrcTiming(time, bpm, meter, sv), (bpm, meter))
         (120.0, "4/4")
     |> fst
     |> Array.ofList
@@ -118,5 +129,5 @@ let toUrc (chart: OsuChart): UrcChart =
         Layout          = layout,
         Timings         = timings,
         Notes           = notes,
-        Judgement       = judgmentFromOd chart.OverallDifficulty
+        Judgment       = judgmentFromOd chart.OverallDifficulty
     )

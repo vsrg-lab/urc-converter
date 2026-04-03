@@ -6,5 +6,5 @@ public record UrcChart(
     UrcLayout Layout,
     IReadOnlyList<UrcTiming> Timings,
     IReadOnlyList<UrcNote> Notes,
-    UrcJudgment? Judgement = null
+    UrcJudgment? Judgment = null
 );

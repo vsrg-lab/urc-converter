@@ -1,6 +1,7 @@
 ﻿module internal UrcConverter.Parser.Osu.Parsing
 
 open System
+open System.Text
 open FParsec
 open FsToolkit.ErrorHandling
 open UrcConverter.Parser.Osu.Internal.Models
@@ -184,7 +185,7 @@ let private assembleChart (sections: RawSection list): Result<OsuChart, string> 
 
 let parseOsuFile (filePath: string): Result<OsuChart, string> =
     try
-        let content = IO.File.ReadAllText(filePath, Text.Encoding.UTF8)
+        let content = IO.File.ReadAllText(filePath, Encoding.UTF8)
 
         match run pOsuFile content with
         | Success((_version, sections), _, _) -> 
