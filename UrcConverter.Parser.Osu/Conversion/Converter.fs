@@ -1,4 +1,4 @@
-﻿module UrcConverter.Parser.Osu.Conversion
+﻿module internal UrcConverter.Parser.Osu.Conversion
 
 open System
 open System.Collections.Generic
@@ -6,30 +6,37 @@ open UrcConverter.Parser.Osu.Internal.Models
 open UrcConverter.Core.Models
 open UrcConverter.Core.Models.Enums
 
-// #region Timing Point Conversion
+// #region Helpers
 
 let private clamp lo hi v = max lo (min hi v)
+
+let private preferUnicode unicode ascii =
+    if String.IsNullOrWhiteSpace unicode then ascii else unicode
+
+// #endregion
+
+
+// #region Timing Point Conversion
 
 /// Convert osu! timing points to URC timing points.
 /// Uninherited (red line) -> BPM change, SV = 1.0
 /// Inherited (green line) -> SV change, BPM carried from previous red line
-let private convertTimingPoints (osuTps: OsuTimingPoint list): UrcTiming list =
+let private convertTimingPoints (osuTps: OsuTimingPoint list): UrcTiming array =
     let sorted = osuTps |> List.sortBy (fun tp -> tp.Time)
 
-    let timings, _ =
-        sorted
-        |> List.mapFold
-            (fun (prevBpm, prevMeter) tp ->
-                if tp.Uninherited then
-                    let bpm = 60000.0 / tp.BeatLength
-                    let meter = $"{tp.Meter}/4"
-                    UrcTiming(tp.Time, bpm, meter, 1.0), (bpm, meter)
-                else
-                    let sv = clamp 0.1 10.0 (-100.0 / tp.BeatLength)
-                    UrcTiming(tp.Time, prevBpm, prevMeter, sv), (prevBpm, prevMeter))
-            (120.0, "4/4")
-
-    timings
+    sorted
+    |> List.mapFold
+        (fun (prevBpm, prevMeter) tp ->
+            if tp.Uninherited then
+                let bpm = 60000.0 / tp.BeatLength
+                let meter = $"{tp.Meter}/4"
+                UrcTiming(tp.Time, bpm, meter, 1.0), (bpm, meter)
+            else
+                let sv = clamp 0.1 10.0 (-100.0 / tp.BeatLength)
+                UrcTiming(tp.Time, prevBpm, prevMeter, sv), (prevBpm, prevMeter))
+        (120.0, "4/4")
+    |> fst
+    |> Array.ofList
 
 // #endregion
 
@@ -51,8 +58,10 @@ let private convertHitObject (keyCount: int) (ho: OsuHitObject): UrcNote list =
     | HitCircle -> [ UrcNote(ho.Time, lane, NoteType.Normal) ]
     | HoldNote ->
         let endTime = ho.EndTime |> Option.defaultValue (ho.Time + 1)
-        [ UrcNote(ho.Time, lane, NoteType.LongStart) 
-          UrcNote(endTime, lane, NoteType.LongEnd) ]
+        [ 
+            UrcNote(ho.Time, lane, NoteType.LongStart) 
+            UrcNote(endTime, lane, NoteType.LongEnd) 
+        ]
 
 // #endregion
 
@@ -67,19 +76,18 @@ let private convertHitObject (keyCount: int) (ho: OsuHitObject): UrcNote list =
 /// 50      : 154.5 - 3 x OD
 let private judgmentFromOd (od: float): UrcJudgment =
     let windows =
-        [ 16.5
-          67.5 - 3.0 * od
-          100.5 - 3.0 * od
-          130.5 - 3.0 * od
-          154.5 - 3.0 * od ]
-        |> List.map (fun w -> Math.Round(w, 2))
+        [| 
+            16.5
+            67.5 - 3.0 * od
+            100.5 - 3.0 * od
+            130.5 - 3.0 * od
+            154.5 - 3.0 * od 
+        |]
+        |> Array.map (fun w -> Math.Round(w, 2))
 
-    let rates = [ 100.0; 100.0; 66.67; 33.33; 16.67 ]
+    let rates = [| 100.0; 100.0; 66.67; 33.33; 16.67 |]
 
-    UrcJudgment(
-        windows |> List :> IReadOnlyList<_>,
-        rates   |> List :> IReadOnlyList<_>
-    )
+    UrcJudgment(windows, rates)
 
 // #endregion
 
@@ -95,27 +103,20 @@ let toUrc (chart: OsuChart): UrcChart =
             Version     = chart.Version
         )
 
-    let layout =
-        UrcLayout(
-            KeyCount        = chart.KeyCount,
-            SpecialKeyCount = 0, 
-            SpecialLanes    = List() :> IReadOnlyList<_>
-        )
-
+    let layout = UrcLayout(chart.KeyCount, 0, Array.empty<int>)
     let timings = convertTimingPoints chart.TimingPoints
 
     let notes =
         chart.HitObjects
         |> List.collect (convertHitObject chart.KeyCount)
         |> List.sortBy (fun n -> n.Timestamp)
-
-    let judgment = judgmentFromOd chart.OverallDifficulty
+        |> Array.ofList
 
     UrcChart(
-        FormatVersion = "1.1",
-        Metadata = metadata,
-        Layout = layout,
-        Timings = timings |> List :> IReadOnlyList<_>,
-        Notes = notes |> List :> IReadOnlyList<_>,
-        Judgement = judgment
+        FormatVersion   = "1.1",
+        Metadata        = metadata,
+        Layout          = layout,
+        Timings         = timings,
+        Notes           = notes,
+        Judgement       = judgmentFromOd chart.OverallDifficulty
     )

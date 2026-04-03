@@ -1,4 +1,4 @@
-﻿module UrcConverter.Parser.Osu.Parsing
+﻿module internal UrcConverter.Parser.Osu.Parsing
 
 open System
 open FParsec
@@ -49,31 +49,61 @@ let private pOsuFile: Parser<int * RawSection list, unit> =
 
 // Helpers
 let private pComma: Parser<unit, unit> = pchar ',' >>% ()
+
 let private pCsvFloat: Parser<float, unit> = pfloat .>> optional pComma
 let private pCsvInt: Parser<int, unit> = pint32 .>> optional pComma
 
-let private pSkipField: Parser<unit, unit> =
+let private pSkipCsvField: Parser<unit, unit> =
     skipManySatisfy (fun c -> c <> ',' && c <> '\r' && c <> '\n') >>. optional pComma
 
-// Key-Value sections
-let private parseKeyValue (line: string): (string * string) option =
-    match line.IndexOf ':' with
-    | -1 -> None
-    | i -> Some(line[.. i - 1].Trim(), line[i + 1 ..].Trim())
+let private tryParseLine (parser: Parser<'a, unit>) (line: string): 'a option =
+    match run (parser .>> restOfLine true) line with
+    | Success(v, _, _)  -> Some v
+    | Failure _         -> None
 
-let private toKvMap (lines: string list): Map<string, string> =
-    lines |> List.choose parseKeyValue |> Map.ofList
+let private findSection name (sections: RawSection list) =
+    sections |> List.tryFind (fun s -> s.Name = name)
 
-// Line sections
-    
-// TimingPoint
+let private findKvSection name (sections: RawSection list): Map<string, string> =
+    findSection name sections
+    |> Option.map (fun s ->
+        s.Lines
+        |> List.choose (fun line ->
+            match line.IndexOf ':' with
+            | -1 -> None
+            | i -> Some(line[.. i - 1].Trim(), line[i + 1 ..].Trim()))
+        |> Map.ofList)
+    |> Option.defaultValue Map.empty
+
+let private findParsedSection name (parser: Parser<'a, unit>) (sections: RawSection list): 'a list =
+    findSection name sections
+    |> Option.map (fun s -> s.Lines |> List.choose (tryParseLine parser))
+    |> Option.defaultValue []
+
+// Key-Value lookups
+let private kvStr key (kv: Map<string, string>) =
+    kv |> Map.tryFind key |> Option.defaultValue ""
+
+let private kvParse (parse: string -> bool * 'a) key fallback (kv: Map<string, string>) =
+    kv
+    |> Map.tryFind key
+    |> Option.bind (fun v -> 
+        match parse v with 
+        | true, x -> Some x 
+        | _ -> None)
+    |> Option.defaultValue fallback
+
+let private kvFloat key fallback kv = kvParse Double.TryParse key fallback kv
+let private kvInt key fallback kv = kvParse Int32.TryParse key fallback kv
+
+// TimingPoint parser
 // Format: time, beatLength, meter, sampleSet, sampleIndex, volume, uninherited, effects
 let private pTimingPointLine: Parser<OsuTimingPoint, unit> =
     pipe4
-        pCsvFloat                                               // [0] time
-        pCsvFloat                                               // [1] beatLength
-        pCsvInt                                                 // [2] meter
-        (pSkipField >>. pSkipField >>. pSkipField >>. pCsvInt)  // skip [3..5], read [6] uninherited
+        pCsvFloat                                                       // [0] time
+        pCsvFloat                                                       // [1] beatLength
+        pCsvInt                                                         // [2] meter
+        (pSkipCsvField >>. pSkipCsvField >>. pSkipCsvField >>. pCsvInt) // skip [3..5], read [6] uninherited
         (fun time beatLen meter uninherited ->
             {
                 Time        = time |> Math.Round |> int
@@ -82,12 +112,7 @@ let private pTimingPointLine: Parser<OsuTimingPoint, unit> =
                 Uninherited = uninherited = 1
             })
 
-let private parseTimingPoint (line: string): OsuTimingPoint option =
-    match run (pTimingPointLine .>> restOfLine true) line with
-    | Success(tp, _, _) -> Some tp
-    | Failure _         -> None
-
-// HitObject
+// HitObject parser
 // Format: x, y, time, type, hitSound[, extras...]
 // Mania hold (type & 128): exras = "endTime:hitSample"
 let private pHitObjectLine: Parser<OsuHitObject, unit> =
@@ -119,72 +144,39 @@ let private pHitObjectLine: Parser<OsuHitObject, unit> =
                 X = x
                 Time = time
                 NoteType = if isHold then HoldNote else HitCircle
-                EndTime = endTime })
-
-let private parseHitObject (line: string): OsuHitObject option =
-    match run pHitObjectLine line with
-    | Success(ho, _, _) -> Some ho
-    | Failure _         -> None
+                EndTime = endTime 
+            })
 
 // #endregion
 
+
 // #region Assemble OsuChart
 
-let private findSection name (sections: RawSection list) =
-    sections |> List.tryFind (fun s -> s.Name = name)
-
-let private kvLookup key (kv: Map<string, string>) =
-    kv |> Map.tryFind key |> Option.defaultValue ""
-
-let private kvFloat key fallback (kv: Map<string, string>) =
-    kv
-    |> Map.tryFind key
-    |> Option.bind (fun v ->
-        match Double.TryParse v with
-        | true, f   -> Some f
-        | _         -> None)
-    |> Option.defaultValue fallback
-
-let private kvInt key fallback (kv: Map<string, string>) =
-    kv
-    |> Map.tryFind key
-    |> Option.bind (fun v ->
-        match Int32.TryParse v with
-        | true, i   -> Some i
-        | _         -> None)
-    |> Option.defaultValue fallback
-
 let private assembleChart (sections: RawSection list): Result<OsuChart, string> =
-    let general = findSection "General" sections |> Option.map (fun s -> toKvMap s.Lines) |> Option.defaultValue Map.empty
-    let metadata = findSection "Metadata" sections |> Option.map (fun s -> toKvMap s.Lines) |> Option.defaultValue Map.empty
-    let difficulty = findSection "Difficulty" sections |> Option.map (fun s -> toKvMap s.Lines) |> Option.defaultValue Map.empty
+    let general = findKvSection "General" sections
+    let metadata = findKvSection "Metadata" sections
+    let difficulty = findKvSection "Difficulty" sections
 
     let mode = kvInt "Mode" -1 general
-    if mode <> 3 then
-        Error $"Not an osu!mania chart (Mode = {mode})"
-    else
-        let timingPoints = 
-            findSection "TimingPoints" sections
-            |> Option.map (fun s -> s.Lines |> List.choose parseTimingPoint)
-            |> Option.defaultValue []
 
-        let hitObjects =
-            findSection "HitObjects" sections
-            |> Option.map (fun s -> s.Lines |> List.choose parseHitObject)
-            |> Option.defaultValue []
+    result {
+        do! Result.requireEqual 3 mode $"Not an osu!mania chart (Mode = {mode})"
 
-        Ok {
-            Mode                = mode
-            Title               = kvLookup "Title" metadata
-            TitleUnicode        = kvLookup "TitleUnicode" metadata
-            Artist              = kvLookup "Artist" metadata
-            ArtistUnicode       = kvLookup "ArtistUnicode" metadata
-            Creator             = kvLookup "Creator" metadata
-            Version             = kvLookup "Version" metadata
-            KeyCount            = kvFloat "CircleSize" 4.0 difficulty |> int
-            OverallDifficulty   = kvFloat "OverallDifficulty" 5.0 difficulty
-            TimingPoints        = timingPoints
-            HitObjects          = hitObjects }
+        return
+            {
+                Mode                = mode
+                Title               = kvStr "Title" metadata
+                TitleUnicode        = kvStr "TitleUnicode" metadata
+                Artist              = kvStr "Artist" metadata
+                ArtistUnicode       = kvStr "ArtistUnicode" metadata
+                Creator             = kvStr "Creator" metadata
+                Version             = kvStr "Version" metadata
+                KeyCount            = kvFloat "CircleSize" 4.0 difficulty |> int
+                OverallDifficulty   = kvFloat "OverallDifficulty" 5.0 difficulty
+                TimingPoints        = findParsedSection "TimingPoints" pTimingPointLine sections
+                HitObjects          = findParsedSection "HitObjects" pHitObjectLine sections
+            }
+    }
 
 // #endregion
 
@@ -195,7 +187,9 @@ let parseOsuFile (filePath: string): Result<OsuChart, string> =
         let content = IO.File.ReadAllText(filePath, Text.Encoding.UTF8)
 
         match run pOsuFile content with
-        | Success((_version, sections), _, _) -> assembleChart sections
-        | Failure(msg, _, _) -> Error $"Failed to parse .osu file: {msg}"
-    with ex:
-        Error $"Failed to read file: {ex.Message}"
+        | Success((_version, sections), _, _) -> 
+            assembleChart sections
+        | Failure(msg, _, _) -> 
+            Result.Error $"Failed to parse .osu file: {msg}"
+    with ex ->
+        Result.Error $"Failed to read file: {ex.Message}"
