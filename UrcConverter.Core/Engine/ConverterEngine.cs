@@ -5,7 +5,7 @@ namespace UrcConverter.Core.Engine;
 public class ConverterEngine
 {
     private readonly List<IChartParser> _parsers = [];
-    
+
     public void RegisterParser(IChartParser parser) => _parsers.Add(parser);
 
     public ParseResult Convert(string filePath)
