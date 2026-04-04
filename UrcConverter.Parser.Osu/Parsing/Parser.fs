@@ -27,7 +27,7 @@ let private pSectionName: Parser<string, unit> =
     pchar '[' >>. manySatisfy ((<>) ']') .>> pchar ']' .>> skipRestOfLine true
 
 let private pContentLine: Parser<string, unit> =
-    notFollowedBy (pchar '[') >>. restOfLine true
+    notFollowedBy (pchar '[') >>. notFollowedBy eof >>. restOfLine true
 
 let private isContentLine (s: string) =
     let t = s.Trim()
