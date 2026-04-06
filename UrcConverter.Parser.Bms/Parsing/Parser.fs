@@ -138,10 +138,14 @@ let private applyHeader (chart: BmsChart) (key: string) (value: string): BmsChar
 
 let private applyExtDef (chart: BmsChart) (prefix: string) (id: string) (value: string): BmsChart =
     let key = Base36.decode id
+
+    let addFloatDef fallback (map: Map<int, float>)  =
+        map |> Map.add key (tryParseFloat value |> Option.defaultValue fallback)
+
     match prefix with
-    | "BPM"     -> { chart with ExtBpms = chart.ExtBpms |> Map.add key (tryParseFloat value |> Option.defaultValue 0.0) }
-    | "STOP"    -> { chart with Stops = chart.Stops |> Map.add key (tryParseFloat value |> Option.defaultValue 0.0) }
-    | "SCROLL"  -> { chart with Scrolls = chart.Scrolls |> Map.add key (tryParseFloat value |> Option.defaultValue 1.0) }
+    | "BPM"     -> { chart with ExtBpms = chart.ExtBpms |> addFloatDef 0.0 }
+    | "STOP"    -> { chart with Stops = chart.Stops |> addFloatDef 0.0 }
+    | "SCROLL"  -> { chart with Scrolls = chart.Scrolls |> addFloatDef 1.0 }
     | _         -> chart
 
 let private applyDataLine (chart: BmsChart) (measure: int) (channel: int) (data: string): BmsChart =
@@ -153,7 +157,7 @@ let private applyDataLine (chart: BmsChart) (measure: int) (channel: int) (data:
         let objects = expandObjects measure channel data
         { chart with Objects = chart.Objects @ objects}
 
-let private assemblChart (lines: BmsLine list): Result<BmsChart, string> =
+let private assembleChart (lines: BmsLine list): Result<BmsChart, string> =
     let chart =
         lines
         |> List.fold
@@ -165,12 +169,17 @@ let private assemblChart (lines: BmsLine list): Result<BmsChart, string> =
                 | Ignored -> chart)
             emptyChart
 
-    if chart.Bpm <= 0.0 then
-        Result.Error "No valid BPM found"
-    elif chart.Objects |> List.exists (fun o -> Channel.isPlayable o.Channel) |> not then
-        Result.Error "No playable note data found"
-    else
-        Result.Ok { chart with Objects = chart.Objects |> List.sortBy (fun o -> o.Measure, o.Position) }
+    result {
+        do! Result.requireTrue 
+                "No valid BPM found" 
+                (chart.Bpm > 0.0)
+
+        do! Result.requireTrue 
+                "No playable note data found" 
+                (chart.Objects |> List.exists (fun o -> Channel.isPlayable o.Channel))
+
+        return { chart with Objects = chart.Objects |> List.sortBy (fun o -> o.Measure, o.Position) }
+    }
 
 // #endregion
 
@@ -180,6 +189,6 @@ let parseBmsFile (filePath: string): Result<BmsChart, string> =
         IO.File.ReadAllLines(filePath, Encoding.UTF8)
         |> Array.toList
         |> List.map classifyLine
-        |> assemblChart
+        |> assembleChart
     with ex ->
         Result.Error $"Failed to read file: {ex.Message}"

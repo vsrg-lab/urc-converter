@@ -9,6 +9,7 @@ open UrcConverter.Parser.Bms.Internal.Models
 // #region Timeline Events
 
 type private TimelineEvent =
+    | MeterChange of float      // channel 02: measure length ratio
     | BpmChangeHex of string    // channel 03: raw 2-char hex BPM
     | BpmChangeExt of int       // channel 08: key into ExtBpms
     | StopRef of int            // channel 09: key into Stops
@@ -18,10 +19,11 @@ type private TimelineEvent =
 /// Processing priority within the same beat position.
 /// BPM/Scroll first, notes second, stops last.
 let private eventPriority = function
-    | BpmChangeHex _ | BpmChangeExt _ -> 0
-    | ScrollRef _ -> 1
-    | NoteHit _ -> 2
-    | StopRef _ -> 3
+    | MeterChange _ -> 0
+    | BpmChangeHex _ | BpmChangeExt _ -> 1
+    | ScrollRef _ -> 2
+    | NoteHit _ -> 3
+    | StopRef _ -> 4
 
 // #endregion
 
@@ -42,26 +44,56 @@ let private beatPosOf (starts: float[]) (chart: BmsChart) (obj: BmsObject): floa
 
 // #endregion
 
+// #region Meter Inference
+
+let private inferMeter (ratio: float): string =
+    let tryDenominator d =
+        let numerator = ratio * float d
+        let rounded = Math.Round numerator
+        if abs (numerator - rounded) < 0.001 then
+            Some $"{int rounded}/{d}"
+        else
+            None
+
+    [ 4; 8; 16 ]
+    |> List.tryPick tryDenominator
+    |> Option.defaultValue "4/4"
+
+// #endregion
+
 // #region Timeline Construction
 
 let private buildTimeline (chart: BmsChart) (measureStarts: float[]): (float * TimelineEvent) list =
-    chart.Objects
-    |> List.choose (fun o ->
-        let bp = beatPosOf measureStarts chart o
-        let key = Base36.decode o.Value
+    let maxMeasure = measureStarts.Length - 2
+    let meterEvents =
+        [
+            for m in 0 .. maxMeasure do
+                let curr = measureLengthOf chart m
+                let prev = if m = 0 then 1.0 else measureLengthOf chart (m - 1)
+                if m = 0 || abs (curr - prev) > 0.001 then
+                    (measureStarts[m], MeterChange curr)
+        ]
 
-        if Channel.isPlayable o.Channel then
-            Some(bp, NoteHit(o.Channel, o.Value))
-        elif o.Channel = Channel.BpmHex then
-            Some(bp, BpmChangeHex o.Value)
-        elif o.Channel = Channel.ExtBpm then
-            Some(bp, BpmChangeExt key)
-        elif o.Channel = Channel.Stop then
-            Some(bp, StopRef key)
-        elif o.Channel = Channel.Scroll then
-            Some(bp, ScrollRef key)
-        else
-            None)
+    let objectEvents =
+        chart.Objects
+        |> List.choose (fun o ->
+            let bp = beatPosOf measureStarts chart o
+            let key = Base36.decode o.Value
+
+            if Channel.isPlayable o.Channel then
+                Some(bp, NoteHit(o.Channel, o.Value))
+            elif o.Channel = Channel.BpmHex then
+                Some(bp, BpmChangeHex o.Value)
+            elif o.Channel = Channel.ExtBpm then
+                Some(bp, BpmChangeExt key)
+            elif o.Channel = Channel.Stop then
+                Some(bp, StopRef key)
+            elif o.Channel = Channel.Scroll then
+                Some(bp, ScrollRef key)
+            else
+                None)
+
+    (meterEvents @ objectEvents) 
     |> List.sortBy (fun (bp, ev) -> bp, eventPriority ev)
 
 // #endregion
@@ -70,7 +102,7 @@ let private buildTimeline (chart: BmsChart) (measureStarts: float[]): (float * T
 
 type private WalkState = { Time: float; Bpm: float; Sv: float; PrevBeatPos: float }
 
-type private TimestampEvent = { Time: int; Bpm: float; Sv: float; Event: TimelineEvent }
+type private TimestampEvent = { Time: int; Bpm: float; Sv: float; BeatPos: float; Event: TimelineEvent }
 
 let private computeTimestamps (chart: BmsChart) (events: (float * TimelineEvent) list): TimestampEvent list =
     let initial = { Time = 0.0; Bpm = chart.Bpm; Sv = 1.0; PrevBeatPos = 0.0 }
@@ -84,6 +116,9 @@ let private computeTimestamps (chart: BmsChart) (events: (float * TimelineEvent)
 
                 let bpm', sv', extra =
                     match ev with
+                    | MeterChange _ ->
+                        st.Bpm, st.Sv, 0.0
+
                     | BpmChangeHex hex ->
                         let b = float (Base36.decode hex)
                         (if b > 0.0 then b else st.Bpm), st.Sv, 0.0
@@ -104,7 +139,7 @@ let private computeTimestamps (chart: BmsChart) (events: (float * TimelineEvent)
                     | NoteHit _ ->
                         st.Bpm, st.Sv, 0.0
 
-                let result = { Time = tNow |> Math.Round |> int; Bpm = bpm'; Sv = sv'; Event = ev }
+                let result = { Time = tNow |> Math.Round |> int; Bpm = bpm'; Sv = sv'; BeatPos = bp; Event = ev }
                 let st' = { Time = tNow + extra; Bpm = bpm'; Sv = sv'; PrevBeatPos = bp }
 
                 (st', result :: acc))
@@ -116,19 +151,28 @@ let private computeTimestamps (chart: BmsChart) (events: (float * TimelineEvent)
 
 // #region Timing Points Extraction
 
-let private extractTimingPoints (initialBpm: float) (events: TimestampEvent list): UrcTiming array =
-    let initial = UrcTiming(0, initialBpm, "4/4", 1.0)
+let private extractTimingPoints (chart: BmsChart) (initialBpm: float) (events: TimestampEvent list): UrcTiming array =
+    let defaultMeter = UrcTiming(0, initialBpm, "4/4", 1.0)
+    let initialMeter = measureLengthOf chart 0 |> inferMeter
 
     let changes =
         events
-        |> List.choose (fun e ->
-            match e.Event with
-            | BpmChangeHex _ | BpmChangeExt _ | ScrollRef _ ->
-                Some(UrcTiming(e.Time, e.Bpm, "4/4", e.Sv))
-            | _ -> None)
+        |> List.fold
+            (fun (meter, acc) e ->
+                match e.Event with
+                | MeterChange ratio ->
+                    let m = inferMeter ratio
+                    (m, UrcTiming(e.Time, e.Bpm, m, e.Sv) :: acc)
+                | BpmChangeHex _ | BpmChangeExt _ | ScrollRef _ ->
+                    (meter, UrcTiming(e.Time, e.Bpm, meter, e.Sv) :: acc)
+                | _ ->
+                    (meter, acc))
+            (initialMeter, [])
+        |> snd
+        |> List.rev
 
     // Merge events at the same timestamp - last one wins for BPM / SV state
-    (initial :: changes)
+    (defaultMeter :: changes)
     |> List.groupBy (fun t -> t.Timestamp)
     |> List.map (fun (_, group) -> group |> List.last)
     |> List.sortBy (fun t -> t.Timestamp)
@@ -225,50 +269,29 @@ let private extractNotes (chart: BmsChart) (hasScratch: bool) (events: Timestamp
     let toLnPairNotes pairs =
         pairs |> List.collect (fun (lane, s, e) -> [ UrcNote(s, lane, NoteType.LongStart); UrcNote(e, lane, NoteType.LongEnd) ])
 
-    match chart.LnObj with
-    | Some lnObjId ->
-        // LNOBJ Mode: all notes are on normal channels, LN end is marked by object ID
-        let mapped = rawNotes |> List.map (fun (t, lane, _, value) -> (t, lane, value))
-        let normals, lnPairs = pairLnObj lnObjId mapped
-        
-        let normalNotes = normals |> List.map (fun (t, lane) -> UrcNote(t, lane, NoteType.Normal))
-        let lnNotes = toLnPairNotes lnPairs
+    let notes =
+        match chart.LnObj with
+        | Some lnObjId ->
+            // LNOBJ Mode: all notes are on normal channels, LN end is marked by object ID
+            let mapped = rawNotes |> List.map (fun (t, lane, _, value) -> (t, lane, value))
+            let normals, lnPairs = pairLnObj lnObjId mapped
+            let normalNotes = normals |> List.map (fun (t, lane) -> UrcNote(t, lane, NoteType.Normal))
 
-        (normalNotes @ lnNotes) |> List.sortBy (fun n -> n.Timestamp) |> Array.ofList
+            normalNotes @ toLnPairNotes lnPairs
 
-    | None when chart.LnType = 1 ->
-        // LNTYPE 1 (RDM): LN channels 51 ~ 59
-        let normalNotes, lnChanNotes = rawNotes |> List.partition (fun (_, _, ch, _) -> Channel.isNote ch)
-        let normals = normalNotes |> List.map (fun (t, lane, _, _) -> UrcNote(t, lane, NoteType.Normal))
+        | None when chart.LnType = 1 ->
+            // LNTYPE 1 (RDM): LN channels 51 ~ 59
+            let normals, lnChanNotes = rawNotes |> List.partition (fun (_, _, ch, _) -> Channel.isNote ch)
+            let lnMapped = lnChanNotes |> List.map (fun (t, lane, _, _) -> (t, lane))
+            let normalNotes = normals |> List.map (fun (t, lane, _, _) -> UrcNote(t, lane, NoteType.Normal))
+            
+            normalNotes @ (pairLnType1 lnMapped |> toLnPairNotes)
 
-        let lnMapped = lnChanNotes |> List.map (fun (t, lane, _, _) -> (t, lane))
-        let lnNotes = pairLnType1 lnMapped |> toLnPairNotes
+        | _ ->
+            // No LN support - treat all as normal notes
+            rawNotes |> List.map (fun (t, lane, _, _) -> UrcNote(t, lane, NoteType.Normal))
 
-        (normals @ lnNotes) |> List.sortBy (fun n -> n.Timestamp) |> Array.ofList
-
-    | _ ->
-        // No LN support - treat all as normal notes
-        rawNotes
-        |> List.map (fun (t, lane, _, _) -> UrcNote(t, lane, NoteType.Normal))
-        |> List.sortBy (fun n -> n.Timestamp)
-        |> Array.ofList
-
-// #endregion
-
-// #region Judgment from #RANK
-
-/// Approximate judgment windows based on LR2/beatoraja conventions.
-/// BMS judgmnet varies by player; these are reasonable defaults.
-let judgment (rank: int): UrcJudgment =
-    let windows =
-        match rank with
-        | 0 ->  [| 8.0; 24.0; 40.0; 200.0 |]    // Very Hard
-        | 1 ->  [| 15.0; 30.0; 60.0; 200.0 |]   // Hard
-        | 3 ->  [| 21.0; 60.0; 120.0; 200.0 |]  // Easy
-        | _ ->  [| 18.0; 40.0; 100.0; 200.0 |]  // Normal (default)
-    let rates = [| 100.0; 100.0; 50.0; 20.0 |]
-
-    UrcJudgment(windows, rates)
+    notes |> List.sortBy (fun n -> n.Timestamp) |> Array.ofList
 
 // #endregion
 
@@ -298,7 +321,7 @@ let toUrc (chart: BmsChart): UrcChart =
             Version = string chart.PlayLevel
         ),
         Layout = UrcLayout(keyCount, specialCount, specialLanes),
-        Timings = extractTimingPoints chart.Bpm timestamp,
+        Timings = extractTimingPoints chart chart.Bpm timestamp,
         Notes = extractNotes chart hasScratch timestamp,
-        Judgment = judgment chart.Rank
+        Judgment = null // BMS doesn't have judgment information.
     )
