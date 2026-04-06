@@ -15,7 +15,6 @@ let private preferUnicode unicode ascii =
 
 // #endregion
 
-
 // #region Timing Point Conversion
 
 /// Convert osu! timing points to URC timing points.
@@ -52,7 +51,6 @@ let private convertTimingPoints (osuTps: OsuTimingPoint list): UrcTiming array =
 
 // #endregion
 
-
 // #region Note Conversion
 
 /// Convert x-coordinate to lane index.
@@ -76,7 +74,6 @@ let private convertHitObject (keyCount: int) (ho: OsuHitObject): UrcNote list =
         ]
 
 // #endregion
-
 
 // #region Judgment Windows
 
@@ -102,7 +99,6 @@ let private judgmentFromOd (od: float): UrcJudgment =
     UrcJudgment(windows, rates)
 
 // #endregion
-
 
 // Public API
 let toUrc (chart: OsuChart): UrcChart =
