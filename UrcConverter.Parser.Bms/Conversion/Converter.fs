@@ -120,7 +120,7 @@ let private computeTimestamps (chart: BmsChart) (events: (float * TimelineEvent)
                         st.Bpm, st.Sv, 0.0
 
                     | BpmChangeHex hex ->
-                        let b = float (Base36.decode hex)
+                        let b = float (Base36.decodeHex hex)
                         (if b > 0.0 then b else st.Bpm), st.Sv, 0.0
 
                     | BpmChangeExt key ->

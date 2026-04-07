@@ -31,12 +31,15 @@ let private pBase36Pair: Parser<string, unit> =
 // #region Line Parsers
 
 /// Data line: #XXXYY:DATA
-/// XXX = 3 decimal digits (measure), YY = 2 base-36 chars (channel)
+/// XXX = 3 decimal digits (measure), YY = 2 decimal digits or 2 base-36 chars if Alphabet includes (channel)
 let private pDataLine: Parser<BmsLine, unit> =
     pchar '#'
     >>. pipe3
         (parray 3 digit |>> fun cs -> Int32.Parse(String(cs)))
-        (parray 2 pBase36Char |>> fun cs -> Base36.decode(String(cs)))
+        (parray 2 pBase36Char |>> fun cs -> 
+            let s = String(cs)
+            if s |> Seq.forall Char.IsDigit then Int32.Parse s
+            else Base36.decode s)
         (pchar ':' >>. restOfLine true |>> fun s -> s.Trim())
         (fun measure channel data -> DataLine(measure, channel, data))
 
@@ -64,9 +67,13 @@ let private pCommandLine: Parser<BmsLine, unit> =
 
 /// Parse a single BMS line. Tries data line first, then command, then ignores.
 let private pBmsLine: Parser<BmsLine, unit> =
-    attempt pDataLine
-    <|> attempt pCommandLine
-    <|> (restOfLine true >>% Ignored)
+    spaces 
+    >>. choice 
+        [ 
+            attempt pDataLine
+            attempt pCommandLine
+            (restOfLine true >>% Ignored)
+        ]
 
 /// Classify a line string using FParsec.
 let private classifyLine (line: string): BmsLine =
