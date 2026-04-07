@@ -1,15 +1,9 @@
 ﻿namespace UrcConverter.Tests.Fixtures;
 
-/// <summary>
-/// Creates temporary .osu files for testing and cleans them up.
-/// </summary>
 public sealed class OsuFileFixture : IDisposable
 {
     private readonly List<string> _tempFiles = [];
 
-    /// <summary>
-    /// Write contents to a temp .osu file and return its path.
-    /// </summary>
     public string CreateTempOsu(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.osu");

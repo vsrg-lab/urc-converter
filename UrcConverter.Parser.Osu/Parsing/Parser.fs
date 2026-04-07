@@ -182,15 +182,12 @@ let private assembleChart (sections: RawSection list): Result<OsuChart, string> 
 // #endregion
 
 // Public API
-
 let parseOsuFile (filePath: string): Result<OsuChart, string> =
     try
         let content = IO.File.ReadAllText(filePath, Encoding.UTF8)
 
         match run pOsuFile content with
-        | Success((_version, sections), _, _) -> 
-            assembleChart sections
-        | Failure(msg, _, _) -> 
-            Result.Error $"Failed to parse .osu file: {msg}"
+        | Success((_version, sections), _, _) -> assembleChart sections
+        | Failure(msg, _, _) -> Result.Error $"Failed to parse .osu file: {msg}"
     with ex ->
         Result.Error $"Failed to read file: {ex.Message}"

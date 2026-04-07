@@ -314,7 +314,7 @@ let toUrc (chart: BmsChart): UrcChart =
     UrcChart(
         FormatVersion = UrcFormat.Version,
         Metadata = UrcMetadata(
-            Original = "BMS",
+            Original = FormatName,
             Title = title,
             Artist = chart.Artist,
             Creator = (if chart.SubArtist <> "" then chart.SubArtist else "Unknown"),

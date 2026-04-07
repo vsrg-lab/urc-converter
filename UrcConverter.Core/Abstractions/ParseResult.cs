@@ -4,7 +4,7 @@ namespace UrcConverter.Core.Abstractions;
 
 public abstract record ParseResult
 {
-    public sealed record Success(UrcChart Chart) : ParseResult;
+    public sealed record Success(IReadOnlyList<UrcChart> Charts) : ParseResult;
 
     public sealed record Failure(string Error) : ParseResult;
 }

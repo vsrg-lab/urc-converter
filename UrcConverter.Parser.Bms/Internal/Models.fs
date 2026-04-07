@@ -3,6 +3,9 @@
 open System
 open System.Globalization
 
+[<Literal>]
+let FormatName = "BMS"
+
 // #region Base-36 Utilities
 
 module Base36 =

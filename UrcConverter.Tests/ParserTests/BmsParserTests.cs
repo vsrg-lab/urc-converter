@@ -1,12 +1,11 @@
 ﻿using FluentAssertions;
-
+using Xunit;
 using UrcConverter.Core;
 using UrcConverter.Core.Abstractions;
 using UrcConverter.Core.Models.Enums;
 using UrcConverter.Parser.Bms;
 using UrcConverter.Tests.Fixtures;
 
-using Xunit;
 
 namespace UrcConverter.Tests.ParserTests;
 
@@ -299,7 +298,7 @@ public sealed class BmsParserTests : IDisposable
     {
         var result = Parser.ParseToUrc(path);
         result.Should().BeOfType<ParseResult.Success>();
-        return ((ParseResult.Success)result).Chart;
+        return ((ParseResult.Success)result).Charts[0];
     }
 
     #endregion

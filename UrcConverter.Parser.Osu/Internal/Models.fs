@@ -1,5 +1,8 @@
 ﻿module internal UrcConverter.Parser.Osu.Internal.Models
 
+[<Literal>]
+let FormatName = "osu!mania"
+
 type OsuNoteType =
     | HitCircle     // type & 1
     | HoldNote      // type & 128 (LN)

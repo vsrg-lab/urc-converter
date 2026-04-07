@@ -104,7 +104,7 @@ let private judgmentFromOd (od: float): UrcJudgment =
 let toUrc (chart: OsuChart): UrcChart =
     let metadata =
         UrcMetadata(
-            Original    = "osu!mania",
+            Original    = FormatName,
             Title       = (if chart.TitleUnicode <> "" then chart.TitleUnicode else chart.Title),
             Artist      = (if chart.ArtistUnicode <> "" then chart.ArtistUnicode else chart.Artist),
             Creator     = chart.Creator,

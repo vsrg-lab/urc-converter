@@ -238,7 +238,7 @@ public sealed class OsuParserTests : IDisposable
     {
         var result = Parser.ParseToUrc(path);
         result.Should().BeOfType<ParseResult.Success>();
-        return ((ParseResult.Success)result).Chart;
+        return ((ParseResult.Success)result).Charts[0];
     }
 
     #endregion

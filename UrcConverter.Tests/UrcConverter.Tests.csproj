@@ -25,6 +25,7 @@
 		<ProjectReference Include="..\UrcConverter.Core\UrcConverter.Core.csproj" />
 		<ProjectReference Include="..\UrcConverter.Parser.Bms\UrcConverter.Parser.Bms.fsproj" />
 		<ProjectReference Include="..\UrcConverter.Parser.Osu\UrcConverter.Parser.Osu.fsproj" />
+		<ProjectReference Include="..\UrcConverter.Parser.Sm\UrcConverter.Parser.Sm.fsproj" />
 	</ItemGroup>
 
 </Project>
