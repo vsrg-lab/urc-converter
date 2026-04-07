@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="FsToolkit.ErrorHandling" Version="5.2.0" />
+		<PackageReference Include="YamlDotNet" Version="16.3.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\UrcConverter.Core\UrcConverter.Core.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Compile Include="Internal\Models.fs" />
+		<Compile Include="Parsing\Parser.fs" />
+		<Compile Include="Conversion\Converter.fs" />
+		<Compile Include="QuaParser.fs" />
+	</ItemGroup>
+
+</Project>
