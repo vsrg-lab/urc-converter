@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="UrcConverter.Core/UrcConverter.Core.csproj" />
   <Project Path="UrcConverter.Parser.Bms/UrcConverter.Parser.Bms.fsproj" Id="2d727146-9dbf-44a6-8097-072c4382587c" />
+  <Project Path="UrcConverter.Parser.Ojn/UrcConverter.Parser.Ojn.fsproj" Id="9108937d-926f-4925-9320-b6371d0f7e06" />
   <Project Path="UrcConverter.Parser.Osu/UrcConverter.Parser.Osu.fsproj" Id="470c5dba-c64c-4e20-a0e5-07eb7c9a72ed" />
   <Project Path="UrcConverter.Parser.Qua/UrcConverter.Parser.Qua.fsproj" Id="58104957-92a5-4b21-bd16-27a5446639f8" />
   <Project Path="UrcConverter.Parser.Sm/UrcConverter.Parser.Sm.fsproj" Id="a9de6f4b-f26a-4fce-913a-a77f965756b4" />

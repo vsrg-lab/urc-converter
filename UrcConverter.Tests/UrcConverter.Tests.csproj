@@ -13,7 +13,7 @@
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 		</PackageReference>
 		<PackageReference Include="FluentAssertions" Version="8.9.0" />
-		<PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.3.0" />
+		<PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
 		<PackageReference Include="xunit.v3" Version="3.2.2" />
 		<PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
 			<PrivateAssets>all</PrivateAssets>
@@ -24,6 +24,7 @@
 	<ItemGroup>
 		<ProjectReference Include="..\UrcConverter.Core\UrcConverter.Core.csproj" />
 		<ProjectReference Include="..\UrcConverter.Parser.Bms\UrcConverter.Parser.Bms.fsproj" />
+		<ProjectReference Include="..\UrcConverter.Parser.Ojn\UrcConverter.Parser.Ojn.fsproj" />
 		<ProjectReference Include="..\UrcConverter.Parser.Osu\UrcConverter.Parser.Osu.fsproj" />
 		<ProjectReference Include="..\UrcConverter.Parser.Qua\UrcConverter.Parser.Qua.fsproj" />
 		<ProjectReference Include="..\UrcConverter.Parser.Sm\UrcConverter.Parser.Sm.fsproj" />
