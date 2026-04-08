@@ -7,11 +7,11 @@ A library and CLI tool that converts various VSRG (Vertical Scrolling Rhythm Gam
 URC Converter serves as the preprocessing stage of a VSRG difficulty prediction ML pipeline. It normalizes game-specific chart formats into a single common representation so that downstream tools (feature extractors, ML models) only need to understand one format.
 
 ```
-osu! (.osu)   ─┐
-BMS  (.bms)   ─┤
-StepMania (.sm)─┼→  URC (.urc)  →  [ML Pipeline]
-Quaver (.qua) ─┤
-O2Jam (.ojn)  ─┘
+osu! (.osu)     ─┐
+BMS  (.bms)     ─┤
+StepMania (.sm) ─┼→  URC (.urc)  →  [ML Pipeline]
+Quaver (.qua)   ─┤
+O2Jam (.ojn)    ─┘
 ```
 
 ## Supported Formats
