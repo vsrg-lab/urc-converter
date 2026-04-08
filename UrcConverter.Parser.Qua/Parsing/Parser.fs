@@ -80,6 +80,11 @@ let private assembleChart (root: YamlMappingNode): Result<QuaChart, string> =
     let sliderVelocities = sequenceOf "SliderVelocities" root |> List.map parseSliderVelocity
     let hitObjects = sequenceOf "HitObjects" root |> List.map parseHitObject
 
+    let mode =
+        match (scalarOr "Mode" "Keys4" root).ToLowerInvariant() with
+        | "keys7" | "2" -> 2
+        | _ -> 1
+
     let hasScratch =
         scalarOr "HasScratchKey" "false" root
         |> fun s -> s.Equals("true", StringComparison.OrdinalIgnoreCase)
@@ -94,7 +99,7 @@ let private assembleChart (root: YamlMappingNode): Result<QuaChart, string> =
             Artist              = scalarOr "Artist" "" root
             Creator             = scalarOr "Creator" "" root
             DifficultyName      = scalarOr "DifficultyName" "" root
-            Mode                = scalarOr "Mode" "1" root |> intOr 1
+            Mode                = mode
             HasScratchKey       = hasScratch
             TimingPoints        = timingPoints
             SliderVelocities    = sliderVelocities
