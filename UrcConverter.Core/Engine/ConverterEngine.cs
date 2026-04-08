@@ -7,6 +7,9 @@ public class ConverterEngine
 {
     private readonly List<IChartParser> _parsers = [];
 
+    public string[] SupportedExtensions =>
+        _parsers.SelectMany(p => p.SupportedExtensions).Distinct().ToArray();
+
     public void RegisterParser(IChartParser parser)
     {
         Guard.Against.Null(parser);

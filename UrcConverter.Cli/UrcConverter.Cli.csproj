@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\UrcConverter.Core\UrcConverter.Core.csproj" />
+    <ProjectReference Include="..\UrcConverter.Parser.Bms\UrcConverter.Parser.Bms.fsproj" />
+    <ProjectReference Include="..\UrcConverter.Parser.Ojn\UrcConverter.Parser.Ojn.fsproj" />
+    <ProjectReference Include="..\UrcConverter.Parser.Osu\UrcConverter.Parser.Osu.fsproj" />
+    <ProjectReference Include="..\UrcConverter.Parser.Qua\UrcConverter.Parser.Qua.fsproj" />
+    <ProjectReference Include="..\UrcConverter.Parser.Sm\UrcConverter.Parser.Sm.fsproj" />
+  </ItemGroup>
+
+</Project>
