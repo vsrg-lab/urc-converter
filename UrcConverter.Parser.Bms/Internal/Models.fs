@@ -53,6 +53,19 @@ module Channel =
 
 // #endregion
 
+// #region Difficulty Mapping
+
+let difficultyName (d: int): string =
+    match d with
+    | 1 -> "BEGINNER"
+    | 2 -> "NORMAL"
+    | 3 -> "HYPER"
+    | 4 -> "ANOTHER"
+    | 5 -> "INSANE"
+    | _ -> ""
+
+// #endregion
+
 // #region BMS Models
 
 /// A single object expanded from a BMS data line.
@@ -74,6 +87,7 @@ type BmsChart = {
     Genre: string
     Bpm: float                      // Initial BPM from #BPM header
     PlayLevel: int                  // #PLAYLEVEL
+    Difficulty: int                 // #DIFFICULTY (1=Beginner, 2=Normal, 3=Hyper, 4=Another, 5=Insane)
     Rank: int                       // 0=VeryHard, 1=Hard, 2=Normal, 3=Easy
     LnType: int                     // 1=RDM (ch 51 ~ 59), 2=MGQ
     LnObj: int option               // #LNOBJ - base-36 decoded object ID marking LN ends
@@ -92,7 +106,7 @@ type BmsChart = {
 
 let emptyChart: BmsChart = {
     Player = 1; Title = ""; SubTitle = ""; Artist = ""; SubArtist = ""
-    Genre = ""; Bpm = 130.0; PlayLevel = 0; Rank = 2; LnType = 1; LnObj = None
+    Genre = ""; Bpm = 130.0; PlayLevel = 0; Difficulty = 0; Rank = 2; LnType = 1; LnObj = None
     ExtBpms = Map.empty; Stops = Map.empty; Scrolls = Map.empty
     MeasureLengths = Map.empty; Objects = []
 }

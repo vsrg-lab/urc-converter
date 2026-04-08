@@ -311,6 +311,12 @@ let toUrc (chart: BmsChart): UrcChart =
     // Build outputs
     let title = if chart.SubTitle <> "" then $"{chart.Title} {chart.SubTitle}" else chart.Title
 
+    // Difficulty
+    let version =
+        let name = difficultyName chart.Difficulty
+        if name <> "" then $"{name} {chart.PlayLevel}"
+        else string chart.PlayLevel
+
     UrcChart(
         FormatVersion = UrcFormat.Version,
         Metadata = UrcMetadata(
@@ -318,7 +324,7 @@ let toUrc (chart: BmsChart): UrcChart =
             Title = title,
             Artist = chart.Artist,
             Creator = (if chart.SubArtist <> "" then chart.SubArtist else "Unknown"),
-            Version = string chart.PlayLevel
+            Version = version
         ),
         Layout = UrcLayout(keyCount, specialCount, specialLanes),
         Timings = extractTimingPoints chart chart.Bpm timestamp,

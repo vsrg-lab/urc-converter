@@ -136,8 +136,8 @@ let private applyHeader (chart: BmsChart) (key: string) (value: string): BmsChar
     | "SUBARTIST"   -> { chart with SubArtist = value }
     | "GENRE"       -> { chart with Genre = value }
     | "BPM"         -> { chart with Bpm = tryParseFloat value |> Option.defaultValue chart.Bpm }
-    | "PLAYLEVEL"
-    | "DIFFICULTY"  -> { chart with PlayLevel  = tryParseInt value |> Option.defaultValue chart.PlayLevel }
+    | "PLAYLEVEL"   -> { chart with PlayLevel  = tryParseInt value |> Option.defaultValue chart.PlayLevel }
+    | "DIFFICULTY"  -> { chart with Difficulty = tryParseInt value |> Option.defaultValue chart.Difficulty }
     | "RANK"        -> { chart with Rank = tryParseInt value |> Option.defaultValue chart.Rank }
     | "LNTYPE"      -> { chart with LnType = tryParseInt value |> Option.defaultValue chart.LnType }
     | "LNOBJ"       -> { chart with LnObj = Some(Base36.decode value) }
