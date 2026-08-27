@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+/libraries/python/uv.lock
+
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+
+# .NET
+bin/
+obj/
+
+/CLAUDE.md
+/AGENTS.md
+/.claude/
+/scratch/

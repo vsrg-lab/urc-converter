@@ -1,0 +1,29 @@
+[project]
+name = "urc-converter"
+version = "0.1.0"
+description = "URC (Universaal Rhythm Chart) parser and converter library"
+requires-python = ">=3.14"
+authors = [
+    { name = "CloudHolic", email = "cloudholic@pm.me" }
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["ruff"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/urc_converter"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+
+[tool.ruff.format]
+indent-style = "tabs"
+quote-style = "double"
+indent-size = 4

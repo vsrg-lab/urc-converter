@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+	<TargetFramework>net10.0</TargetFramework>
+	<RootNamespace>UrcConverter</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+	<Compile Include="Library.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+  	<PackaageReference Include="FParsec" Version="1.1.1" />
+  </ItemGroup>
+
+</Project>

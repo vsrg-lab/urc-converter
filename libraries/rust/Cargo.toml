@@ -1,0 +1,11 @@
+[package]
+name = "urc-converter"
+version = "0.1.0"
+edition = "2024"
+description = "URC (Universaal Rhythm Chart) parser and converter library"
+
+[lib]
+name = "urc_converter"
+
+[dependencies]
+thiserror = "2"

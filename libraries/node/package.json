@@ -1,0 +1,25 @@
+{
+	"name": "urc-converter",
+	"version": "0.1.0",
+	"description": "URC (Universal Rhythm Chart) parser and converter library",
+	"type": "module",
+	"exports": {
+		".": {
+			"types:": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc"
+	},
+	"engines": {
+		"node": ">=24",
+		"pnpm": ">=11.22.0"
+	},
+	"devDependencies": {
+		"typescript": "^7.0.2"
+	}
+}

@@ -1,0 +1,38 @@
+[project]
+name = "urc-cli"
+version = "0.1.0"
+description = "Command-line tool for converitng rhythm game charts to URC"
+requires-python = ">=3.14"
+authors = [
+    { name = "CloudHolic", email = "cloudholic@pm.me" }
+]
+dependencies = [
+	"urc-converter"
+]
+
+[project.scripts]
+cli = "urc-cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["ruff"]
+
+[tool.uv.sources]
+urc-converter = { path = "../../libraries/python" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/urc-cli"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N" ]
+
+[tool.ruff.format]
+indent-style = "tabs"
+quote-style = "double"
+indent-size = 4
