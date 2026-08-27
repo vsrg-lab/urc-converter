@@ -1,7 +1,7 @@
 [project]
 name = "urc-converter"
 version = "0.1.0"
-description = "URC (Universaal Rhythm Chart) parser and converter library"
+description = "URC (Universal Rhythm Chart) parser and converter library"
 requires-python = ">=3.14"
 authors = [
     { name = "CloudHolic", email = "cloudholic@pm.me" }

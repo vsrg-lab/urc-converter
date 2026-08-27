@@ -1,7 +1,7 @@
 [project]
 name = "urc-cli"
 version = "0.1.0"
-description = "Command-line tool for converitng rhythm game charts to URC"
+description = "Command-line tool for converting rhythm game charts to URC"
 requires-python = ">=3.14"
 authors = [
     { name = "CloudHolic", email = "cloudholic@pm.me" }
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cli = "urc-cli:main"
+cli = "urc_cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -24,7 +24,7 @@ dev = ["ruff"]
 urc-converter = { path = "../../libraries/python" }
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/urc-cli"]
+packages = ["src/urc_cli"]
 
 [tool.ruff]
 line-length = 100
