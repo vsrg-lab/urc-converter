@@ -28,11 +28,11 @@ packages = ["src/urc_cli"]
 
 [tool.ruff]
 line-length = 100
+indent-width = 4
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "N" ]
 
 [tool.ruff.format]
-indent-style = "tabs"
+indent-style = "tab"
 quote-style = "double"
-indent-size = 4
