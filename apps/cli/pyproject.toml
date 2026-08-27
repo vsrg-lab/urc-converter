@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cli = "urc_cli:main"
+urc = "urc_cli:main"
 
 [build-system]
 requires = ["hatchling"]
