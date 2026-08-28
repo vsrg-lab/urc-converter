@@ -29,8 +29,11 @@ module internal Lex =
                 ))
 
     let private pMeter: Parser<Meter, unit> =
-        pipe2 pUnsigned (pchar '/' >>. pUnsigned) (fun beats noteValue ->
-            { Beats = beats; NoteValue = noteValue })
+        pUnsigned
+        .>>. (pchar '/' >>. pUnsigned)
+        >>= fun (beats, noteValue) ->
+            if beats < 1 || noteValue < 1 then fail "meter components must be positive"
+            else preturn { Beats = beats; NoteValue = noteValue }
 
     let private pLayoutType: Parser<int * int option, unit> =
         pipe2 pUnsigned (opt (pchar '+' >>. pUnsigned)) (fun keys special -> keys, special)

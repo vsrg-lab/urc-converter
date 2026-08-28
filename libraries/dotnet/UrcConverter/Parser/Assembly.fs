@@ -78,7 +78,7 @@ module internal Assembly =
             let keys, specialKeys =
                 match state.LayoutType with
                 | Some(keys, specialKeys) -> keys, specialKeys
-                | None -> failwith "Layout Type must exist after rule 4 validation"
+                | None -> invalidOp "Layout Type must exist after rule 4 validation"
 
             let ordered =
                 state.Notes |> List.rev |> List.sortBy (fun raw -> raw.Timestamp, raw.Lane)
@@ -95,13 +95,13 @@ module internal Assembly =
                         | None, _ -> None
                         | Some windows, Some rates -> Some { Windows = windows; Rates = rates }
                         | Some _, None ->
-                            failwith "Judgment Rate must exist after rule 4 validation"
+                            invalidOp "Judgment Rate must exist after rule 4 validation"
 
                     let metadataValue name =
                         match List.tryFind (fun (key, _) -> key = name) state.Metadata with
                         | Some(_, value) -> value
                         | None ->
-                            failwith $"Metadata field '{name}' must exist after rule 4 validation"
+                            invalidOp $"Metadata field '{name}' must exist after rule 4 validation"
 
                     Ok
                         {

@@ -14,12 +14,6 @@ module Strings =
     let sectionTiming = "@Timing"
     let sectionNotes = "@Notes"
 
-    let sectionIndex =
-        sections
-        |> List.indexed
-        |> List.map (fun (index, name) -> name, index)
-        |> Map.ofList
-
     let requiredSections =
         [ sectionMetadata; sectionLayout; sectionTiming; sectionNotes ]
 

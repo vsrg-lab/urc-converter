@@ -1,5 +1,6 @@
 ﻿namespace UrcConverter.Parser
 
+open FsToolkit.ErrorHandling
 open FParsec
 open UrcConverter
 open UrcConverter.Parser.State
@@ -60,24 +61,30 @@ module Scan =
                     section
                 )
 
-    let rec private scanLoop (lines: (int * string) list) (state: ParseState) current =
+    let private scanStep line text rest state current =
+        result {
+            if line = 1 then
+                let! nextState = header text line state
+                return rest, nextState, current
+            else
+                match text with
+                | Skip -> return rest, state, current
+                | SectionName name ->
+                    do! Checks.finalizeSection state current line
+                    let! nextState, nextSection = sectionHeader name line state
+                    return rest, nextState, nextSection
+                | Content field ->
+                    let! nextState = handleContent current state field line
+                    return rest, nextState, current
+        }
+
+    let rec private scanLoop (lines: (int * string) list) state current =
         match lines with
         | [] -> Result.Ok(state, current)
         | (line, raw) :: rest ->
-            let text = raw.Trim()
-
-            if line = 1 then
-                header text line state |> Result.bind (fun state -> scanLoop rest state current)
-            else
-                match text with
-                | Skip -> scanLoop rest state current
-                | SectionName name ->
-                    Checks.finalizeSection state current line
-                    |> Result.bind (fun () -> sectionHeader name line state)
-                    |> Result.bind (fun (state, section) -> scanLoop rest state section)
-                | Content field ->
-                    handleContent current state field line
-                    |> Result.bind (fun state -> scanLoop rest state current)
+            match scanStep line (raw.Trim()) rest state current with
+            | Result.Ok(nextLines, nextState, nextCurrent) -> scanLoop nextLines nextState nextCurrent
+            | Result.Error error -> Result.Error error
 
     let parse (text: string) : Result<Chart, UrcError> =
         let text =

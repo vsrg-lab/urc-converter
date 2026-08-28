@@ -5,8 +5,6 @@ module Writer =
     open System
     open System.Globalization
 
-    // InvariantCulture ToString gives the shortest round-trip form ("160" for
-    // 160.0), matching the Python reference's repr-based formatting.
     let private floatText (value: float) =
         value.ToString(CultureInfo.InvariantCulture)
 
@@ -14,23 +12,23 @@ module Writer =
         String.Join(", ", List.map floatText values)
 
     let write (chart: Chart) : string =
-        let layout = chart.Layout
+        let layoutLines =
+            let typeText =
+                if chart.Layout.SpecialKeys > 0 then
+                    $"{chart.Layout.Keys}+{chart.Layout.SpecialKeys}"
+                else
+                    string chart.Layout.Keys
 
-        let typeText =
-            if layout.SpecialKeys > 0 then
-                $"{layout.Keys}+{layout.SpecialKeys}"
-            else
-                string layout.Keys
+            let specialText =
+                match chart.Layout.SpecialLanes with
+                | None -> Strings.specialNone
+                | Some lanes -> String.Join(", ", List.map string lanes)
 
-        let specialText =
-            match layout.SpecialLanes with
-            | None -> Strings.specialNone
-            | Some lanes -> String.Join(", ", List.map string lanes)
-
-        let lines = ResizeArray<string>()
-        lines.Add $"@URC {chart.FormatVersion.Major}.{chart.FormatVersion.Minor}"
-        lines.Add ""
-        lines.Add Strings.sectionMetadata
+            [
+                Strings.sectionLayout
+                $"{Strings.layoutFieldType}: {typeText}"
+                $"{Strings.layoutFieldSpecial}: {specialText}"
+            ]
 
         let metadataValues =
             [
@@ -41,41 +39,50 @@ module Writer =
                 chart.Metadata.Version
             ]
 
-        for name, value in List.zip Strings.metadataFields metadataValues do
-            lines.Add $"{name}: {value}"
+        let metadataLines =
+            Strings.sectionMetadata
+            :: (List.zip Strings.metadataFields metadataValues
+                |> List.map (fun (name, value) -> $"{name}: {value}"))
 
-        match chart.Judgment with
-        | Some judgment ->
-            lines.Add ""
-            lines.Add Strings.sectionJudgment
-            lines.Add $"{Strings.judgmentFieldWindow}: {joined judgment.Windows}"
-            lines.Add $"{Strings.judgmentFieldRate}: {joined judgment.Rates}"
-        | None -> ()
-
-        lines.Add ""
-        lines.Add Strings.sectionLayout
-        lines.Add $"{Strings.layoutFieldType}: {typeText}"
-        lines.Add $"{Strings.layoutFieldSpecial}: {specialText}"
-        lines.Add ""
-        lines.Add Strings.sectionTiming
-
-        for point in chart.TimingPoints do
-            let fields =
+        let judgmentLines =
+            match chart.Judgment with
+            | Some judgment ->
                 [
-                    string point.TimestampMs
-                    floatText point.Bpm
-                    $"{point.Meter.Beats}/{point.Meter.NoteValue}"
+                    Strings.sectionJudgment
+                    $"{Strings.judgmentFieldWindow}: {joined judgment.Windows}"
+                    $"{Strings.judgmentFieldRate}: {joined judgment.Rates}"
                 ]
-                @ (match point.Multiplier with
-                   | Some multiplier -> [ floatText multiplier ]
-                   | None -> [])
+            | None -> []
 
-            lines.Add(String.Join(", ", fields))
+        let timingLines =
+            chart.TimingPoints
+            |> List.map (fun point ->
+                let fields =
+                    [
+                        string point.TimestampMs
+                        floatText point.Bpm
+                        $"{point.Meter.Beats}/{point.Meter.NoteValue}"
+                    ]
+                    @ (match point.Multiplier with
+                       | Some multiplier -> [ floatText multiplier ]
+                       | None -> [])
 
-        lines.Add ""
-        lines.Add Strings.sectionNotes
+                String.Join(", ", fields))
 
-        for note in List.sortBy (fun note -> note.TimestampMs, note.Lane) chart.Notes do
-            lines.Add $"{note.TimestampMs}, {note.Lane}, {note.Type.Token}"
+        let noteLines =
+            chart.Notes
+            |> List.sortBy (fun note -> note.TimestampMs, note.Lane)
+            |> List.map (fun note -> $"{note.TimestampMs}, {note.Lane}, {note.Type.Token}")
 
-        String.Join("\n", lines) + "\n"
+        [
+            [ $"@URC {chart.FormatVersion.Major}.{chart.FormatVersion.Minor}" ]
+            metadataLines
+            judgmentLines
+            layoutLines
+            Strings.sectionTiming :: timingLines
+            Strings.sectionNotes :: noteLines
+        ]
+        |> List.filter (not << List.isEmpty)
+        |> List.collect (fun section -> "" :: section)
+        |> List.tail
+        |> fun lines -> String.Join("\n", lines) + "\n"

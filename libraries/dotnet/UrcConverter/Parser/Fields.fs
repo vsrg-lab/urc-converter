@@ -57,13 +57,14 @@ module internal Fields =
                 | None ->
                     layoutTypeToken (value.Trim()) line
                     |> Result.bind (fun (keys, special) ->
-                        if keys < 1 || (special.IsSome && special.Value < 1) then
+                        match keys, special with
+                        | keys, _ when keys < 1 ->
                             Error(UrcError.Syntax(line, "Type values must be positive"))
-                        else
-                            Ok
-                                { state with
-                                    LayoutType = Some(keys, defaultArg special 0)
-                                })
+                        | _, Some specialKeys when specialKeys < 1 ->
+                            Error(UrcError.Syntax(line, "Type values must be positive"))
+                        | keys, Some specialKeys ->
+                            Ok { state with LayoutType = Some(keys, specialKeys) }
+                        | keys, None -> Ok { state with LayoutType = Some(keys, 0) })
             elif name = Strings.layoutFieldSpecial then
                 if state.SpecialSeen then
                     Error(UrcError.Syntax(line, "duplicate layout field: Special"))
