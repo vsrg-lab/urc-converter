@@ -16,6 +16,7 @@ dist/
 # .NET
 bin/
 obj/
+.vs/
 
 /CLAUDE.md
 /AGENTS.md

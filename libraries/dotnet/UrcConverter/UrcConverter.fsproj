@@ -1,16 +1,26 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-	<TargetFramework>net10.0</TargetFramework>
-	<RootNamespace>UrcConverter</RootNamespace>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+	</PropertyGroup>
 
-  <ItemGroup>
-	<Compile Include="Library.fs" />
-  </ItemGroup>
+	<ItemGroup>
+		<Compile Include="Strings.fs" />
+		<Compile Include="Error.fs" />
+		<Compile Include="Model.fs" />
+		<Compile Include="Parser\State.fs" />
+		<Compile Include="Parser\Lex.fs" />
+		<Compile Include="Parser\Fields.fs" />
+		<Compile Include="Parser\Checks.fs" />
+		<Compile Include="Parser\Assembly.fs" />
+		<Compile Include="Parser\Scan.fs" />
+		<Compile Include="Writer.fs" />
+	</ItemGroup>
 
-  <ItemGroup>
-  	<PackaageReference Include="FParsec" Version="1.1.1" />
-  </ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="FParsec" Version="1.1.1" />
+		<PackageReference Include="FsToolkit.ErrorHandling" Version="5.2.0" />
+	</ItemGroup>
 
 </Project>
