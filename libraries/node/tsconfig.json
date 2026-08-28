@@ -1,13 +1,26 @@
 {
 	"compilerOptions": {
+		"tsBuildInfoFile": "./node_modules/.tmp/urc-converter.tsbuildinfo",
+		"incremental": true,
 		"target": "es2025",
-		"module": "NodeNext",
-		"moduleResolution": "NodeNext",
-		"strict": true,
+		"lib": ["ES2025"],
+		"types": ["node"],
+		"skipLibCheck": true,
+
+		/* Node ESM library (replaces bundler-mode noEmit settings) */
+		"module": "nodenext",
+		"moduleDetection": "force",
 		"declaration": true,
 		"outDir": "dist",
 		"rootDir": "src",
-		"skipLibCheck": true,
+
+		/* Linting */
+		"strict": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"verbatimModuleSyntax": true,
+		"erasableSyntaxOnly": true,
+		"noFallthroughCasesInSwitch": true,
 	},
 	"include": ["src"],
 }
