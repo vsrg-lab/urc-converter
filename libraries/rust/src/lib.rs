@@ -3,9 +3,10 @@
 pub mod error;
 pub mod model;
 pub mod parser;
+pub mod strings;
 pub mod writer;
 
 pub use error::{Result, UrcError};
 pub use model::{Chart, Judgment, Layout, Metadata, Meter, Note, NoteType, TimingPoint, Version};
-pub use parser::parse;
+pub use parser::scan::parse;
 pub use writer::write;

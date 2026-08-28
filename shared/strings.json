@@ -1,0 +1,44 @@
+{
+	"categories": {
+		"syntax": "Malformed syntax: bad numbers, field shape, unknown section, or bad @URC header",
+		"unsupported-version": "@URC version parses but is not supported by this library"
+	},
+	"rules": {
+		"1": "First line is '@URC <version>'",
+		"2": "All required sections present",
+		"3": "Sections in correct order",
+		"4": "All required fields present",
+		"5": "All required metadata fields have values",
+		"6": "Field names are valid",
+		"7": "Window and Rate have same count",
+		"8": "Window values ascending",
+		"9": "Rate values descending",
+		"10": "Rate values in range 0-100",
+		"11": "Type matches note lane count (enforced as rule 18)",
+		"12": "Special lanes are valid indices",
+		"13": "No duplicate special lanes",
+		"14": "First timing point at timestamp 0",
+		"15": "Timestamps ascending",
+		"16": "BPM positive",
+		"17": "Valid meter format",
+		"18": "All lanes valid (0 to key_count-1)",
+		"19": "Valid note types",
+		"20": "LS/LE properly paired",
+		"21": "No overlapping long notes on same lane",
+		"22": "Timestamps non-negative"
+	},
+	"sections": [
+		"@URC",
+		"@Metadata",
+		"@Judgment",
+		"@Layout",
+		"@Timing",
+		"@Notes"
+	],
+	"requiredSections": ["@Metadata", "@Layout", "@Timing", "@Notes"],
+	"metadataFields": ["Original", "Title", "Artist", "Creator", "Version"],
+	"judgmentFields": ["Window", "Rate"],
+	"layoutFields": ["Type", "Special"],
+	"noteTokens": ["N", "LS", "LE", "M", "F"],
+	"specialNone": "None"
+}

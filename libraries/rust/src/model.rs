@@ -96,6 +96,6 @@ pub struct Chart {
     pub metadata: Metadata,
     pub judgment: Option<Judgment>,
     pub layout: Layout,
-    pub timing_points: Vec<TimingPoint>,
+    pub timing: Vec<TimingPoint>,
     pub notes: Vec<Note>,
 }
