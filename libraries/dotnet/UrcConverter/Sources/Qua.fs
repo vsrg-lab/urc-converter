@@ -62,15 +62,16 @@ module Qua =
         else
             None
 
-    let private number (node: YamlNode) (key: string) : Result<float, UrcError> =
-        match node with
-        | :? YamlScalarNode as scalar ->
+    let private number (mapping: YamlMappingNode) (key: string) : Result<float, UrcError> =
+        match tryFind mapping key with
+        | Some(:? YamlScalarNode as scalar) ->
             match
                 Double.TryParse(scalar.Value, NumberStyles.Float, CultureInfo.InvariantCulture)
             with
             | true, value -> Result.Ok value
             | false, _ -> Result.Error(UrcError.Syntax(1, $"invalid {key}: '{scalar.Value}'"))
-        | _ -> Result.Error(UrcError.Syntax(1, $"missing {key}"))
+        | Some _ -> Result.Error(UrcError.Syntax(1, $"invalid {key}"))
+        | None -> Result.Error(UrcError.Syntax(1, $"missing {key}"))
 
     let private numberOr
         (mapping: YamlMappingNode)
@@ -79,7 +80,7 @@ module Qua =
         : Result<float, UrcError> =
         match tryFind mapping key with
         | None -> Result.Ok fallback
-        | Some node -> number node key
+        | Some _ -> number mapping key
 
     let private entries
         (mapping: YamlMappingNode)
@@ -103,7 +104,7 @@ module Qua =
         | _ -> None
 
     let parse (text: string) : Result<QuaMap, UrcError> =
-        let stream = new YamlStream()
+        let stream = YamlStream()
 
         let loaded =
             try
@@ -242,7 +243,9 @@ module Qua =
                 let specialKeys = if qua.HasScratchKey then 1 else 0
 
                 let firstNoteTime =
-                    qua.HitObjects |> List.map (fun obj -> obj.StartTime) |> List.fold min 0
+                    match qua.HitObjects with
+                    | [] -> 0
+                    | objects -> objects |> List.map _.StartTime |> List.min
 
                 let! timing =
                     Shared.buildTiming
@@ -348,7 +351,5 @@ module Qua =
                             TimingPoints = timing
                             Notes = notes
                         }
-                | _ ->
-                    return!
-                        Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
+                | _ -> return! Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
         }

@@ -294,7 +294,9 @@ module Osu =
                     return! Result.Error(UrcError.Syntax(1, "timing point with zero beat length"))
 
                 let firstNoteTime =
-                    beatmap.HitObjects |> List.map (fun obj -> obj.Time) |> List.fold min 0
+                    match beatmap.HitObjects with
+                    | [] -> 0
+                    | objects -> objects |> List.map _.Time |> List.min
 
                 let! timing =
                     Shared.buildTiming

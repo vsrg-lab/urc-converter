@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from urc_converter import NoteType, UrcError, parse
+from urc_converter.source import convert_osu, convert_qua, parse_osu, parse_qua
 
 
 def command_info(path: Path) -> int:
@@ -47,6 +48,27 @@ def command_validate(path: Path) -> int:
 	return 0
 
 
+def command_convert(path: Path) -> int:
+	"""Convert a source chart (.osu/.qua) to URC text on stdout."""
+	try:
+		text = path.read_text(encoding="utf-8")
+
+		match path.suffix.lower():
+			case ".osu":
+				chart = convert_osu(parse_osu(text))
+			case ".qua":
+				chart = convert_qua(parse_qua(text))
+			case suffix:
+				print(f"error: {path}: unsupported file type: {suffix}", file=sys.stderr)
+				return 1
+
+		sys.stdout.write(write(chart))
+	except UrcError as error:
+		print(f"error: {path}: {error}", file=sys.stderr)
+		return 1
+	return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(prog="urc", description="Convert rhythm game charts to URC.")
 	subparsers = parser.add_subparsers(dest="command", required=True)
@@ -60,6 +82,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 	)
 	validate_parser.add_argument("file", type=Path)
 	validate_parser.set_defaults(handler=command_validate)
+
+	convert_parser = subparsers.add_parser("convert", help="convert a source chart to URC.")
+	convert_parser.add_argument("file", type=Path)
+	convert_parser.set_defaults(handler=command_convert)
 
 	args = parser.parse_args(argv)
 	return args.handler(args.file)
