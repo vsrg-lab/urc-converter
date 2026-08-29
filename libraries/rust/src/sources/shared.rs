@@ -97,8 +97,8 @@ pub(crate) fn build_timing(
         })
         .collect();
 
-    if let Some(first) = points.first() {
-        if first.timestamp_ms != 0 {
+    if let Some(first) = points.first()
+        && first.timestamp_ms != 0 {
             points.insert(
                 0,
                 TimingPoint {
@@ -109,7 +109,6 @@ pub(crate) fn build_timing(
                 },
             );
         }
-    }
 
     Ok(points)
 }

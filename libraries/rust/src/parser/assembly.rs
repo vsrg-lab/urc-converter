@@ -76,15 +76,12 @@ pub(super) fn build(state: ParseState, end_line: u32) -> Result<Chart> {
             }
         };
         match note_type {
-            NoteType::Le => match open_ls.remove(&raw.lane) {
-                None => {
-                    return Err(UrcError::new(
-                        rule(20),
-                        raw.line,
-                        format!("LE without an open LS on lane {}", raw.lane),
-                    ));
-                }
-                Some(_) => {}
+            NoteType::Le => if open_ls.remove(&raw.lane) == None {
+                return Err(UrcError::new(
+                    rule(20),
+                    raw.line,
+                    format!("LE without an open LS on lane {}", raw.lane),
+                ));
             },
             NoteType::Ls => {
                 if open_ls.contains_key(&raw.lane) {

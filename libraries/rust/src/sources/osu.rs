@@ -237,11 +237,10 @@ pub fn convert_osu(beatmap: &OsuBeatmap) -> Result<Chart> {
 }
 
 fn general(beatmap: &mut OsuBeatmap, line: &str, line_no: u32) -> Result<()> {
-    if let Some((key, value)) = line.split_once(':') {
-        if key.trim() == "Mode" {
+    if let Some((key, value)) = line.split_once(':')
+        && key.trim() == "Mode" {
             beatmap.mode = to_int(value.trim(), line_no, "Mode")?;
         }
-    }
     Ok(())
 }
 
