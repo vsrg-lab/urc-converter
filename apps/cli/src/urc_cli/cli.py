@@ -5,7 +5,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from urc_converter import NoteType, UrcError, parse
+from urc_converter import NoteType, UrcError, parse, write
 from urc_converter.sources import convert_osu, convert_qua, parse_osu, parse_qua
 
 
