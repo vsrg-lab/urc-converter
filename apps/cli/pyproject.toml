@@ -23,7 +23,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-urc-converter = { path = "../../libraries/python" }
+urc-converter = { path = "../../libraries/python", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/urc_cli"]

@@ -67,7 +67,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "urc-converter", directory = "../../libraries/python" }]
+requires-dist = [{ name = "urc-converter", editable = "../../libraries/python" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff" }]
@@ -75,7 +75,7 @@ dev = [{ name = "ruff" }]
 [[package]]
 name = "urc-converter"
 version = "0.1.0"
-source = { directory = "../../libraries/python" }
+source = { editable = "../../libraries/python" }
 dependencies = [
     { name = "pyyaml" },
 ]

@@ -50,6 +50,8 @@ def command_validate(path: Path) -> int:
 
 def command_convert(path: Path) -> int:
 	"""Convert a source chart (.osu/.qua) to URC text on stdout."""
+	chart = None
+
 	try:
 		text = path.read_text(encoding="utf-8")
 
@@ -62,7 +64,7 @@ def command_convert(path: Path) -> int:
 				print(f"error: {path}: unsupported file type: {suffix}", file=sys.stderr)
 				return 1
 
-		sys.stdout.write(write(chart))
+		sys.stdout.buffer.write(write(chart).encode("utf-8"))
 	except UrcError as error:
 		print(f"error: {path}: {error}", file=sys.stderr)
 		return 1
