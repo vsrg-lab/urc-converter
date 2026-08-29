@@ -11,8 +11,8 @@ pip install urc-converter
 from urc_converter import UrcError, parse, write
 
 try:
-    chart = parse(text)      # raises UrcError(category, line, message) on failure
-    print(write(chart))      # canonical URC text
+	chart = parse(text)  # raises UrcError(category, line, message) on failure
+	print(write(chart))  # canonical URC text
 except UrcError as error:
-    print(error.category, error.line)
+	print(error.category, error.line)
 ```

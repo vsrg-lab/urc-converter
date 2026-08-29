@@ -3,6 +3,7 @@
 pub mod error;
 pub mod model;
 pub mod parser;
+pub mod sources;
 pub mod strings;
 pub mod writer;
 
