@@ -11,14 +11,16 @@ dependencies = [
 ]
 
 [project.scripts]
-urc = "urc_cli:main"
+urc = "urc_cli.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["ruff"]
+dev = [
+    "ruff",
+]
 
 [tool.uv.sources]
 urc-converter = { path = "../../libraries/python" }

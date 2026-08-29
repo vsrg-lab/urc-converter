@@ -2,6 +2,8 @@
 	"name": "urc-converter",
 	"version": "0.1.0",
 	"description": "URC (Universal Rhythm Chart) parser and converter library",
+	"license": "MIT",
+	"author": "CloudHolic <cloudholic@pm.me>",
 	"type": "module",
 	"exports": {
 		".": {
