@@ -17,12 +17,16 @@
 		<Compile Include="Parser\Checks.fs" />
 		<Compile Include="Parser\Assembly.fs" />
 		<Compile Include="Parser\Scan.fs" />
+		<Compile Include="Sources\Shared.fs" />
+		<Compile Include="Sources\Osu.fs" />
+		<Compile Include="Sources\Qua.fs" />
 		<Compile Include="Writer.fs" />
 	</ItemGroup>
 
 	<ItemGroup>
 		<PackageReference Include="FParsec" Version="1.1.1" />
 		<PackageReference Include="FsToolkit.ErrorHandling" Version="5.2.0" />
+		<PackageReference Include="YamlDotNet" Version="18.1.0" />
 	</ItemGroup>
 
 </Project>
