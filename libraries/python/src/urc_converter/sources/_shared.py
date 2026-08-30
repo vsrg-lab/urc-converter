@@ -1,5 +1,7 @@
 """Shared merge and validation helpers for converters."""
 
+from itertools import groupby
+
 from ..error import UrcError
 from ..model import Meter, Note, NoteType, TimingPoint
 
@@ -27,20 +29,21 @@ def build_timing(
 	current_bpm: float | None = None
 	current_beats = 4
 	current_multiplier = 1.0
-	last: tuple[float, float] | None = None
+	last: tuple[float, float, int] | None = None
 	emitted: list[tuple[int, float, float, int]] = []
 
-	for time, _, is_bpm, value, beats in events:
-		if is_bpm:
-			current_bpm, current_beats = value, beats
-		else:
-			current_multiplier = value
+	for time, group in groupby(events, key=lambda event: event[0]):
+		for _, _, is_bpm, value, beats in group:
+			if is_bpm:
+				current_bpm, current_beats = value, beats
+			else:
+				current_multiplier = value
 
-		if current_bpm is None or (current_bpm, current_multiplier) == last:
+		if current_bpm is None or (current_bpm, current_multiplier, current_beats) == last:
 			continue
 
 		emitted.append((round_ms(time), current_bpm, current_multiplier, current_beats))
-		last = (current_bpm, current_multiplier)
+		last = (current_bpm, current_multiplier, current_beats)
 
 	if not emitted:
 		raise UrcError("syntax", 1, f"{source}: no BPM timing point")

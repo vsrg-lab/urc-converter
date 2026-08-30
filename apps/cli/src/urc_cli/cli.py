@@ -6,7 +6,14 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from urc_converter import NoteType, UrcError, parse, write
-from urc_converter.sources import convert_osu, convert_qua, parse_osu, parse_qua
+from urc_converter.sources import (
+	convert_bms,
+	convert_osu,
+	convert_qua,
+	parse_bms,
+	parse_osu,
+	parse_qua,
+)
 
 
 def command_info(path: Path) -> int:
@@ -48,20 +55,37 @@ def command_validate(path: Path) -> int:
 	return 0
 
 
-def command_convert(path: Path) -> int:
-	"""Convert a source chart (.osu/.qua) to URC text on stdout."""
+def command_convert(path: Path, seed: int | None, branches: list[int] | None) -> int:
+	"""Convert a source chart to URC on stdout."""
 	chart = None
+	suffix = path.suffix.lower()
 
 	try:
-		text = path.read_text(encoding="utf-8")
+		if (seed is not None or branches is not None) and suffix not in (
+			".bms",
+			".bme",
+			".bml",
+			".pms",
+		):
+			print("error: --seed/--branches only apply to BMS sources", file=sys.stderr)
+			return 1
 
-		match path.suffix.lower():
+		match suffix:
 			case ".osu":
-				chart = convert_osu(parse_osu(text))
+				chart = convert_osu(parse_osu(path.read_text(encoding="utf-8")))
 			case ".qua":
-				chart = convert_qua(parse_qua(text))
-			case suffix:
-				print(f"error: {path}: unsupported file type: {suffix}", file=sys.stderr)
+				chart = convert_qua(parse_qua(path.read_text(encoding="utf-8")))
+			case ".bms" | ".bme" | ".bml" | ".pms":
+				chart = convert_bms(
+					parse_bms(
+						path.read_bytes(),
+						pms=suffix == ".pms",
+						seed=seed,
+						branches=branches,
+					)
+				)
+			case unsupported:
+				print(f"error: {path}: unsupported file type: {unsupported}", file=sys.stderr)
 				return 1
 
 		sys.stdout.buffer.write(write(chart).encode("utf-8"))
@@ -69,6 +93,13 @@ def command_convert(path: Path) -> int:
 		print(f"error: {path}: {error}", file=sys.stderr)
 		return 1
 	return 0
+
+
+def _branch_list(value: str) -> list[int]:
+	try:
+		return [int(part) for part in value.split(",") if part]
+	except ValueError:
+		raise argparse.ArgumentTypeError(f"invalid branches: {value}") from None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -87,9 +118,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 	convert_parser = subparsers.add_parser("convert", help="convert a source chart to URC.")
 	convert_parser.add_argument("file", type=Path)
+	convert_parser.add_argument("--seed", type=int, help="seed for BMS #RANDOM expansion")
+	convert_parser.add_argument(
+		"--branches", type=_branch_list, help="explicit #RANDOM picks, e.g. 2,1"
+	)
 	convert_parser.set_defaults(handler=command_convert)
 
 	args = parser.parse_args(argv)
+	if args.command == "convert":
+		return command_convert(args.file, args.seed, args.branches)
+
 	return args.handler(args.file)
 
 
