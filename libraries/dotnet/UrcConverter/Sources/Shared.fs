@@ -31,7 +31,7 @@ module internal Shared =
             Bpm: float option
             Beats: int
             Multiplier: float
-            Last: (float * float) option
+            Last: (float * float * int) option
             Emitted: EmittedTimingPoint list
         }
 
@@ -61,34 +61,39 @@ module internal Shared =
                 Emitted = []
             }
 
-        let folder (state: ScanState) event =
-            let time, state =
-                match event with
-                | BpmPoint(time, _, bpm, beats) ->
-                    time,
-                    { state with
-                        Bpm = Some bpm
-                        Beats = beats
-                    }
-                | SvPoint(time, _, multiplier) -> time, { state with Multiplier = multiplier }
-
-            match state.Bpm with
-            | None -> state
-            | Some bpm when state.Last = Some(bpm, state.Multiplier) -> state
+        let groupedEvents =
+            events
+            |> List.groupBy (function
+                | BpmPoint(time, _, _, _)
+                | SvPoint(time, _, _) -> time)
+        let folder (state: ScanState) (time, evts) =
+            let mutable nextBpm = state.Bpm
+            let mutable nextBeats = state.Beats
+            let mutable nextMult = state.Multiplier
+            for evt in evts do
+                match evt with
+                | BpmPoint(_, _, bpm, beats) ->
+                    nextBpm <- Some bpm
+                    nextBeats <- beats
+                | SvPoint(_, _, mult) ->
+                    nextMult <- mult
+            let nextState = { state with Bpm = nextBpm; Beats = nextBeats; Multiplier = nextMult }
+            match nextBpm with
+            | None -> nextState
+            | Some bpm when state.Last = Some(bpm, nextMult, nextBeats) -> nextState
             | Some bpm ->
-                { state with
-                    Last = Some(bpm, state.Multiplier)
+                { nextState with
+                    Last = Some(bpm, nextMult, nextBeats)
                     Emitted =
                         {
                             Time = time
                             Bpm = bpm
-                            Multiplier = state.Multiplier
-                            Beats = state.Beats
+                            Multiplier = nextMult
+                            Beats = nextBeats
                         }
                         :: state.Emitted
                 }
-
-        let scanState = List.fold folder initial events
+        let scanState = List.fold folder initial groupedEvents
 
         match List.rev scanState.Emitted with
         | [] -> Result.Error(UrcError.Syntax(1, $"{source}: no BPM timing point"))

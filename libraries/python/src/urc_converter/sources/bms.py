@@ -12,24 +12,6 @@ _TYPE_ORDER = {NoteType.N: 0, NoteType.LS: 1, NoteType.LE: 2, NoteType.M: 3}
 
 _SIDE_OF = {"1": 0, "5": 0, "D": 0, "2": 1, "6": 1, "E": 1}
 _SYSTEM_CHANNELS = ("02", "03", "08", "09", "SC")
-_LANE_TABLES: dict[tuple[str, int], dict[str, int]] = {
-	("beat5", 0): {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 0},
-	("beat5", 1): {"1": 7, "2": 8, "3": 9, "4": 10, "5": 11, "6": 6},
-	("beat7", 0): {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 0, "8": 6, "9": 7},
-	("beat7", 1): {"1": 9, "2": 10, "3": 11, "4": 12, "5": 13, "6": 8, "8": 14, "9": 15},
-	("popn", 0): {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4},
-	("popn", 1): {"2": 5, "3": 6, "4": 7, "5": 8},
-	("pms18", 0): {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 7, "7": 8, "8": 5, "9": 6},
-	("pms18", 1): {"1": 9, "2": 10, "3": 11, "4": 12, "5": 13, "6": 16, "7": 17, "8": 14, "9": 15},
-}
-_TABLE_OF_MODE = {
-	"5K": "beat5",
-	"10K": "beat5",
-	"7K": "beat7",
-	"14K": "beat7",
-	"PMS9": "popn",
-	"PMS18": "pms18",
-}
 _LAYOUTS = {
 	"5K": (5, 1, [0]),
 	"7K": (7, 1, [0]),
@@ -443,8 +425,43 @@ def _detect_mode(pms: bool, used: set[tuple[int, str]]) -> str:
 
 
 def _lane(mode: str, channel: str) -> int | None:
-	table = _LANE_TABLES[(_TABLE_OF_MODE[mode], _SIDE_OF[channel[0]])]
-	return table.get(channel[1])
+	side = _SIDE_OF[channel[0]]
+	key = channel[1]
+	if mode in ("5K", "10K"):
+		if key == "6":
+			return side * 6
+		if "1" <= key <= "5":
+			return int(key) + side * 6
+		return None
+	if mode in ("7K", "14K"):
+		if key == "6":
+			return side * 8
+		if "1" <= key <= "5":
+			return int(key) + side * 8
+		if key in ("8", "9"):
+			return int(key) - 8 + 6 + side * 8
+		return None
+	if mode == "PMS9":
+		if side == 0 and "1" <= key <= "5":
+			return int(key) - 1
+		if side == 1 and "2" <= key <= "5":
+			return int(key) - 2 + 5
+		return None
+	if mode == "PMS18":
+		base = side * 9
+		if "1" <= key <= "5":
+			return base + int(key) - 1
+		match key:
+			case "8":
+				return base + 5
+			case "9":
+				return base + 6
+			case "6":
+				return base + 7
+			case "7":
+				return base + 8
+		return None
+	return None
 
 
 def _id_value(text: str, base: int) -> int:

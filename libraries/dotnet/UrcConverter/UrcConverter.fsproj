@@ -18,6 +18,7 @@
 		<Compile Include="Parser\Assembly.fs" />
 		<Compile Include="Parser\Scan.fs" />
 		<Compile Include="Sources\Shared.fs" />
+		<Compile Include="Sources\Bms.fs" />
 		<Compile Include="Sources\Osu.fs" />
 		<Compile Include="Sources\Qua.fs" />
 		<Compile Include="Writer.fs" />

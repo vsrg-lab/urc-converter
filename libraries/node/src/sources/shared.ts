@@ -37,17 +37,24 @@ export function buildTiming(
 	let currentBpm: number | null = null;
 	let currentBeats = 4;
 	let currentMultiplier = 1;
-	let last: [number, number] | null = null;
+	let last: [number, number, number] | null = null;
 	const emitted: RawTiming[] = [];
 
-	for (const [time, , isBpm, value, beats] of events) {
-		if (isBpm) {
-			currentBpm = value;
-			currentBeats = beats;
-		} else
-			currentMultiplier = value;
+	let i = 0;
+	while (i < events.length) {
+		const time = events[i][0];
 
-		if (currentBpm === null || (currentBpm === last?.[0] && currentMultiplier === last?.[1]))
+		while (i < events.length && events[i][0] === time) {
+			const [, , isBpm, value, beats] = events[i];
+			if (isBpm) {
+				currentBpm = value;
+				currentBeats = beats;
+			} else
+				currentMultiplier = value;
+			i++;
+		}
+
+		if (currentBpm === null || (currentBpm === last?.[0] && currentMultiplier === last?.[1] && currentBeats === last?.[2]))
 			continue;
 
 		emitted.push({
@@ -56,7 +63,7 @@ export function buildTiming(
 			multiplier: currentMultiplier,
 			beats: currentBeats
 		});
-		last = [currentBpm, currentMultiplier];
+		last = [currentBpm, currentMultiplier, currentBeats];
 	}
 
 	if (emitted.length === 0)

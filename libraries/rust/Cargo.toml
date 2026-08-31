@@ -9,5 +9,6 @@ license = "MIT"
 name = "urc_converter"
 
 [dependencies]
+encoding_rs = "0.8.35"
 thiserror = "2"
 yaml-rust2 = "0.12.0"

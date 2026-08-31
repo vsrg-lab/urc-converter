@@ -3,5 +3,5 @@ export type { Chart, Judgment, Layout, Meter, Metadata, Note, NoteType, TimingPo
 export { totalLanes } from "./model.js";
 export { parse } from "./parser/scan.js";
 export { write } from "./writer.js";
-export { osu, qua } from "./sources/index.js";
+export { bms, osu, qua } from "./sources/index.js";
 export * as strings from "./strings.js";

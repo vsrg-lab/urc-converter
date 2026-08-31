@@ -43,32 +43,35 @@ pub(crate) fn build_timing(
     let mut current_bpm: Option<f64> = None;
     let mut current_beats = 4_u64;
     let mut current_multiplier = 1.0_f64;
-    let mut last: Option<(f64, f64)> = None;
+    let mut last: Option<(f64, f64, u64)> = None;
     let mut emitted: Vec<(i64, f64, f64, u64)> = Vec::new();
-
-    for (time, _, is_bpm, value, beats) in events {
-        if is_bpm {
-            current_bpm = Some(value);
-            current_beats = beats;
-        } else {
-            current_multiplier = value;
+    let mut i = 0;
+    while i < events.len() {
+        let time = events[i].0;
+        while i < events.len() && events[i].0 == time {
+            let (_, _, is_bpm, value, beats) = events[i];
+            if is_bpm {
+                current_bpm = Some(value);
+                current_beats = beats;
+            } else {
+                current_multiplier = value;
+            }
+            i += 1;
         }
-
         let bpm = match current_bpm {
             Some(bpm) => bpm,
             None => continue,
         };
-        if last == Some((bpm, current_multiplier)) {
+        if last == Some((bpm, current_multiplier, current_beats)) {
             continue;
         }
-
         emitted.push((
             round_ms(time as f64),
             bpm,
             current_multiplier,
             current_beats,
         ));
-        last = Some((bpm, current_multiplier));
+        last = Some((bpm, current_multiplier, current_beats));
     }
 
     if emitted.is_empty() {
@@ -98,17 +101,18 @@ pub(crate) fn build_timing(
         .collect();
 
     if let Some(first) = points.first()
-        && first.timestamp_ms != 0 {
-            points.insert(
-                0,
-                TimingPoint {
-                    timestamp_ms: 0,
-                    bpm: first.bpm,
-                    meter: first.meter,
-                    multiplier: None,
-                },
-            );
-        }
+        && first.timestamp_ms != 0
+    {
+        points.insert(
+            0,
+            TimingPoint {
+                timestamp_ms: 0,
+                bpm: first.bpm,
+                meter: first.meter,
+                multiplier: None,
+            },
+        );
+    }
 
     Ok(points)
 }
