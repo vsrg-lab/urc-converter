@@ -1,16 +1,27 @@
-﻿namespace UrcConverter.Parser
+namespace UrcConverter.Parser
 
+open System.Globalization
+open System.IO
 open FsToolkit.ErrorHandling
-open FParsec
 open UrcConverter
 open UrcConverter.Parser.State
 
 module Scan =
 
-    let private pVersion: Parser<Version, unit> =
-        pstring "@URC "
-        >>. pipe2 Lex.pUnsigned (pchar '.' >>. Lex.pUnsigned) (fun major minor ->
-            { Major = major; Minor = minor })
+    let private parseVersion (text: string) : Version option =
+        if text.StartsWith("@URC ") then
+            let ver = text.Substring(5).Trim()
+            let parts = ver.Split('.')
+            if parts.Length = 2 then
+                match System.Int32.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture),
+                      System.Int32.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture) with
+                | (true, major), (true, minor) when major >= 0 && minor >= 0 ->
+                    Some { Major = major; Minor = minor }
+                | _ -> None
+            else
+                None
+        else
+            None
 
     let private (|Skip|SectionName|Content|) (text: string) =
         if text.Length = 0 || text[0] = '#' then Skip
@@ -31,8 +42,8 @@ module Scan =
         if text.Length < 4 || text[0..3] <> "@URC" then
             Result.Error(UrcError.Rule(1, line, "first line must be '@URC <version>'"))
         else
-            match run (pVersion .>> eof) text with
-            | Success(version, _, _) ->
+            match parseVersion text with
+            | Some version ->
                 if version.Major <> 1 || version.Minor > 1 then
                     Result.Error(
                         UrcError.UnsupportedVersion(
@@ -42,7 +53,7 @@ module Scan =
                     )
                 else
                     Result.Ok { state with Version = version }
-            | Failure _ -> Result.Error(UrcError.Syntax(line, $"malformed @URC header: '{text}'"))
+            | None -> Result.Error(UrcError.Syntax(line, $"malformed @URC header: '{text}'"))
 
     let private sectionHeader (name: string) (line: int) (state: ParseState) =
         match Map.tryFind name byName with
@@ -61,47 +72,39 @@ module Scan =
                     section
                 )
 
-    let private scanStep line text rest state current =
-        result {
-            if line = 1 then
-                let! nextState = header text line state
-                return rest, nextState, current
-            else
-                match text with
-                | Skip -> return rest, state, current
-                | SectionName name ->
-                    do! Checks.finalizeSection state current line
-                    let! nextState, nextSection = sectionHeader name line state
-                    return rest, nextState, nextSection
-                | Content field ->
-                    let! nextState = handleContent current state field line
-                    return rest, nextState, current
-        }
-
-    let rec private scanLoop (lines: (int * string) list) state current =
-        match lines with
-        | [] -> Result.Ok(state, current)
-        | (line, raw) :: rest ->
-            match scanStep line (raw.Trim()) rest state current with
-            | Result.Ok(nextLines, nextState, nextCurrent) -> scanLoop nextLines nextState nextCurrent
-            | Result.Error error -> Result.Error error
-
     let parse (text: string) : Result<Chart, UrcError> =
         let text =
-            match text with
-            | t when t.Length > 0 && t[0] = '\uFEFF' -> t[1..]
-            | t -> t
+            if text.Length > 0 && text[0] = '\uFEFF' then text.Substring(1) else text
 
-        let lines =
-            text.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n') |> Array.toList
+        use reader = new StringReader(text)
 
-        let endLine = List.length lines + 1
+        let rec loop lineNumber state current =
+            let raw = reader.ReadLine()
+            if isNull raw then
+                Result.Ok(lineNumber, state, current)
+            else
+                let trimmed = raw.Trim()
+                if lineNumber = 1 then
+                    match header trimmed 1 state with
+                    | Ok nextState -> loop 2 nextState current
+                    | Error err -> Error err
+                else
+                    match trimmed with
+                    | Skip -> loop (lineNumber + 1) state current
+                    | SectionName name ->
+                        match Checks.finalizeSection state current lineNumber with
+                        | Error err -> Error err
+                        | Ok () ->
+                            match sectionHeader name lineNumber state with
+                            | Ok(nextState, nextSection) -> loop (lineNumber + 1) nextState nextSection
+                            | Error err -> Error err
+                    | Content field ->
+                        match handleContent current state field lineNumber with
+                        | Ok nextState -> loop (lineNumber + 1) nextState current
+                        | Error err -> Error err
 
-        let numbered =
-            lines |> List.indexed |> List.map (fun (index, line) -> index + 1, line)
-
-        match scanLoop numbered initial Section.UrcHeader with
-        | Result.Ok(state, current) ->
+        match loop 1 initial Section.UrcHeader with
+        | Ok(endLine, state, current) ->
             Checks.finalizeSection state current endLine
             |> Result.bind (fun () -> Assembly.build state endLine)
-        | Result.Error error -> Result.Error error
+        | Error error -> Error error

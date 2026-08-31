@@ -1,4 +1,4 @@
-﻿namespace UrcConverter
+namespace UrcConverter
 
 /// Parse failure with a machine-readable category and source line.
 type UrcError =
@@ -31,3 +31,15 @@ type UrcError =
             Line = line
             Message = message
         }
+
+[<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
+module UrcError =
+
+    let syntax (line: int) (message: string) : UrcError =
+        UrcError.Syntax(line, message)
+
+    let rule (number: int) (line: int) (message: string) : UrcError =
+        UrcError.Rule(number, line, message)
+
+    let unsupportedVersion (line: int) (message: string) : UrcError =
+        UrcError.UnsupportedVersion(line, message)

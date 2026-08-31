@@ -1,4 +1,4 @@
-﻿namespace UrcConverter
+namespace UrcConverter
 
 module Writer =
 
@@ -6,10 +6,14 @@ module Writer =
     open System.Globalization
 
     let private floatText (value: float) =
-        value.ToString(CultureInfo.InvariantCulture)
+        // Spec formatting: if integer-valued, format as integer (e.g. 1.0 -> 1)
+        if value = Math.Floor value then
+            (int64 value).ToString(CultureInfo.InvariantCulture)
+        else
+            value.ToString(CultureInfo.InvariantCulture)
 
     let private joined (values: float list) =
-        String.Join(", ", List.map floatText values)
+        values |> List.map floatText |> String.concat ", "
 
     let write (chart: Chart) : string =
         let layoutLines =
@@ -22,7 +26,7 @@ module Writer =
             let specialText =
                 match chart.Layout.SpecialLanes with
                 | None -> Strings.specialNone
-                | Some lanes -> String.Join(", ", List.map string lanes)
+                | Some lanes -> lanes |> List.map string |> String.concat ", "
 
             [
                 Strings.sectionLayout
@@ -67,7 +71,7 @@ module Writer =
                        | Some multiplier -> [ floatText multiplier ]
                        | None -> [])
 
-                String.Join(", ", fields))
+                fields |> String.concat ", ")
 
         let noteLines =
             chart.Notes
@@ -82,7 +86,8 @@ module Writer =
             Strings.sectionTiming :: timingLines
             Strings.sectionNotes :: noteLines
         ]
-        |> List.filter (not << List.isEmpty)
-        |> List.collect (fun section -> "" :: section)
-        |> List.tail
-        |> fun lines -> String.Join("\n", lines) + "\n"
+        |> List.choose (function
+            | [] -> None
+            | lines -> Some(String.concat "\n" lines))
+        |> String.concat "\n\n"
+        |> fun text -> text + "\n"

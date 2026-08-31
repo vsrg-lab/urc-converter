@@ -1,4 +1,4 @@
-﻿namespace UrcConverter.Parser
+namespace UrcConverter.Parser
 
 open UrcConverter
 open UrcConverter.Parser.State
@@ -14,9 +14,19 @@ module internal Assembly =
         | "F" -> Some NoteType.F
         | _ -> None
 
-    let rec private validateNotes totalLanes openLs notes raws =
+    let rec private validateNotes totalLanes (openLs: int[]) notes raws =
         match raws with
-        | [] -> Ok(openLs, notes)
+        | [] ->
+            // Check if any LS is unterminated (earliest lane)
+            let rec findOpen lane =
+                if lane >= totalLanes then None
+                elif openLs[lane] <> 0 then Some(lane, openLs[lane])
+                else findOpen (lane + 1)
+
+            match findOpen 0 with
+            | Some(lane, lsLine) ->
+                Error(UrcError.Rule(20, lsLine, $"unterminated LS on lane {lane}"))
+            | None -> Ok notes
         | raw :: rest ->
             if raw.Timestamp < 0 then
                 Error(UrcError.Rule(22, raw.Line, "note timestamps must be non-negative"))
@@ -36,12 +46,9 @@ module internal Assembly =
 
                     match noteType with
                     | NoteType.LE ->
-                        if Map.containsKey raw.Lane openLs then
-                            validateNotes
-                                totalLanes
-                                (Map.remove raw.Lane openLs)
-                                (note :: notes)
-                                rest
+                        if openLs[raw.Lane] <> 0 then
+                            openLs[raw.Lane] <- 0
+                            validateNotes totalLanes openLs (note :: notes) rest
                         else
                             Error(
                                 UrcError.Rule(
@@ -51,7 +58,7 @@ module internal Assembly =
                                 )
                             )
                     | NoteType.LS ->
-                        if Map.containsKey raw.Lane openLs then
+                        if openLs[raw.Lane] <> 0 then
                             Error(
                                 UrcError.Rule(
                                     21,
@@ -60,11 +67,8 @@ module internal Assembly =
                                 )
                             )
                         else
-                            validateNotes
-                                totalLanes
-                                (Map.add raw.Lane raw.Line openLs)
-                                (note :: notes)
-                                rest
+                            openLs[raw.Lane] <- raw.Line
+                            validateNotes totalLanes openLs (note :: notes) rest
                     | _ -> validateNotes totalLanes openLs (note :: notes) rest
 
     let build (state: ParseState) endLine =
@@ -80,16 +84,14 @@ module internal Assembly =
                 | Some(keys, specialKeys) -> keys, specialKeys
                 | None -> invalidOp "Layout Type must exist after rule 4 validation"
 
+            let totalLanes = keys + specialKeys
             let ordered =
                 state.Notes |> List.rev |> List.sortBy (fun raw -> raw.Timestamp, raw.Lane)
 
-            match validateNotes (keys + specialKeys) Map.empty [] ordered with
+            let openLsArray = Array.zeroCreate totalLanes
+            match validateNotes totalLanes openLsArray [] ordered with
             | Error error -> Error error
-            | Ok(openLs, revNotes) ->
-                match Map.toList openLs with
-                | (lane, lsLine) :: _ ->
-                    Error(UrcError.Rule(20, lsLine, $"unterminated LS on lane {lane}"))
-                | [] ->
+            | Ok revNotes ->
                     let judgment =
                         match state.Windows, state.Rates with
                         | None, _ -> None

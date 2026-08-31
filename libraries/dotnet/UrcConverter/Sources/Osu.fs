@@ -1,4 +1,4 @@
-﻿namespace UrcConverter.Sources
+namespace UrcConverter.Sources
 
 open System
 open System.Globalization
@@ -135,10 +135,10 @@ module Osu =
             | [] -> preturn ()
             | [ _ ] -> fail "timing point needs at least 2 fields"
             | time :: beatLength :: _ ->
-                let meter = Shared.tryAt 2 fields |> Option.map Shared.roundMs |> Option.defaultValue 4
+                let meter = List.tryItem 2 fields |> Option.map Shared.roundMs |> Option.defaultValue 4
 
                 let uninherited =
-                    Shared.tryAt 6 fields
+                    List.tryItem 6 fields
                     |> Option.map (fun value -> Shared.roundMs value <> 0)
                     |> Option.defaultValue true
 
@@ -317,7 +317,7 @@ module Osu =
 
                 let! notes =
                     beatmap.HitObjects
-                    |> List.map (fun obj ->
+                    |> List.traverseResultM (fun obj ->
                         let lane = min (max (obj.X * keys / 512) 0) (keys - 1)
 
                         match obj.IsHold, obj.EndTime with
@@ -352,7 +352,6 @@ module Osu =
                                         Type = NoteType.N
                                     }
                                 ])
-                    |> Shared.sequence
                     |> Result.map List.concat
 
                 do! Shared.checkHoldOverlap notes
@@ -390,7 +389,7 @@ module Osu =
                         | Some value when value <> "" -> None
                         | _ -> Some name)
 
-                let missingText = String.Join(", ", missing)
+                let missingText = missing |> String.concat ", "
 
                 if missing <> [] then
                     return! Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))

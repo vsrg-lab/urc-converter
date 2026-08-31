@@ -1,4 +1,4 @@
-﻿namespace UrcConverter.Sources
+namespace UrcConverter.Sources
 
 open System
 open System.Globalization
@@ -55,12 +55,9 @@ module Qua =
         }
 
     let private tryFind (mapping: YamlMappingNode) (key: string) : YamlNode option =
-        let mutable value = Unchecked.defaultof<YamlNode>
-
-        if mapping.Children.TryGetValue(YamlScalarNode(key), &value) then
-            Some value
-        else
-            None
+        match mapping.Children.TryGetValue(YamlScalarNode(key)) with
+        | true, value -> Some value
+        | false, _ -> None
 
     let private number (mapping: YamlMappingNode) (key: string) : Result<float, UrcError> =
         match tryFind mapping key with
@@ -91,11 +88,10 @@ module Qua =
         | Some(:? YamlSequenceNode as sequence) ->
             sequence.Children
             |> Seq.toList
-            |> List.map (fun node ->
+            |> List.traverseResultM (fun node ->
                 match node with
                 | :? YamlMappingNode as entry -> Result.Ok entry
                 | _ -> Result.Error(UrcError.Syntax(1, $"{key} must be a list of mappings")))
-            |> Shared.sequence
         | Some _ -> Result.Error(UrcError.Syntax(1, $"{key} must be a list of mappings"))
 
     let private scalarText (mapping: YamlMappingNode) (key: string) : string option =
@@ -136,9 +132,8 @@ module Qua =
 
                         let! timingPoints =
                             entries root "TimingPoints"
-                            |> Result.bind (fun list ->
-                                list
-                                |> List.map (fun entry ->
+                            |> Result.bind (
+                                List.traverseResultM (fun entry ->
                                     result {
                                         let! bpm = number entry "Bpm"
 
@@ -165,14 +160,12 @@ module Qua =
                                                 Bpm = bpm
                                                 Signature = signature
                                             }
-                                    })
-                                |> Shared.sequence)
+                                    }))
 
                         let! svPoints =
                             entries root "ScrollSpeedFactors"
-                            |> Result.bind (fun list ->
-                                list
-                                |> List.map (fun entry ->
+                            |> Result.bind (
+                                List.traverseResultM (fun entry ->
                                     result {
                                         let! startTime =
                                             number entry "StartTime" |> Result.map Shared.roundMs
@@ -184,14 +177,12 @@ module Qua =
                                                 StartTime = startTime
                                                 Multiplier = multiplier
                                             }
-                                    })
-                                |> Shared.sequence)
+                                    }))
 
                         let! hitObjects =
                             entries root "HitObjects"
-                            |> Result.bind (fun list ->
-                                list
-                                |> List.map (fun entry ->
+                            |> Result.bind (
+                                List.traverseResultM (fun entry ->
                                     result {
                                         let! startTime =
                                             number entry "StartTime" |> Result.map Shared.roundMs
@@ -212,8 +203,7 @@ module Qua =
                                                 EndTime = endTime
                                                 Mine = objectType = 1
                                             }
-                                    })
-                                |> Shared.sequence)
+                                    }))
 
                         return
                             {
@@ -259,7 +249,7 @@ module Qua =
 
                 let! notes =
                     qua.HitObjects
-                    |> List.map (fun obj ->
+                    |> List.traverseResultM (fun obj ->
                         let lane = obj.Lane - 1
 
                         if lane < 0 || lane >= total then
@@ -303,7 +293,6 @@ module Qua =
                                         Type = NoteType.N
                                     }
                                 ])
-                    |> Shared.sequence
                     |> Result.map List.concat
 
                 do! Shared.checkHoldOverlap notes
@@ -323,7 +312,7 @@ module Qua =
                         | Some value when value <> "" -> None
                         | _ -> Some name)
 
-                let missingText = String.Join(", ", missing)
+                let missingText = missing |> String.concat ", "
 
                 if missing <> [] then
                     return! Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))

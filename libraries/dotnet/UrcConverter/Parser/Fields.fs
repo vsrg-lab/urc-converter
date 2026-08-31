@@ -1,4 +1,4 @@
-﻿namespace UrcConverter.Parser
+namespace UrcConverter.Parser
 
 open FsToolkit.ErrorHandling
 open UrcConverter
@@ -106,22 +106,22 @@ module internal Fields =
                 }
 
     let timingPoint (state: ParseState) (text: string) (line: int) =
-        let fields = text.Split(',') |> Array.toList |> List.map _.Trim()
-
-        match fields with
-        | [ timestampText; bpmText; meterText ] ->
+        let fields = text.Split(',')
+        match fields.Length with
+        | 3 ->
             result {
-                let! timestamp = intToken timestampText line
-                let! bpm = floatToken bpmText line
-                let! meter = meterToken meterText line
+                let! timestamp = intToken (fields[0].Trim()) line
+                let! bpm = floatToken (fields[1].Trim()) line
+                let! meter = meterToken (fields[2].Trim()) line
                 return! addTiming state timestamp bpm meter None line
             }
-        | [ timestampText; bpmText; meterText; multiplierText ] ->
+        | 4 ->
             result {
-                let! timestamp = intToken timestampText line
-                let! bpm = floatToken bpmText line
-                let! meter = meterToken meterText line
+                let! timestamp = intToken (fields[0].Trim()) line
+                let! bpm = floatToken (fields[1].Trim()) line
+                let! meter = meterToken (fields[2].Trim()) line
 
+                let multiplierText = fields[3].Trim()
                 // A trailing comma leaves an empty 4th field; the spec reads it as "no multiplier".
                 let! multiplier =
                     if multiplierText = "" then
@@ -131,19 +131,18 @@ module internal Fields =
 
                 return! addTiming state timestamp bpm meter multiplier line
             }
-        | _ ->
+        | count ->
             Error(
-                UrcError.Syntax(line, $"timing point needs 3 or 4 fields, got {List.length fields}")
+                UrcError.Syntax(line, $"timing point needs 3 or 4 fields, got {count}")
             )
 
     let noteLine (state: ParseState) (text: string) (line: int) =
-        let fields = text.Split(',') |> Array.toList |> List.map _.Trim()
-
-        match fields with
-        | [ timestampText; laneText; typeText ] ->
+        let fields = text.Split(',')
+        match fields.Length with
+        | 3 ->
             result {
-                let! timestamp = intToken timestampText line
-                let! lane = intToken laneText line
+                let! timestamp = intToken (fields[0].Trim()) line
+                let! lane = intToken (fields[1].Trim()) line
 
                 return
                     { state with
@@ -151,10 +150,10 @@ module internal Fields =
                             {
                                 Timestamp = timestamp
                                 Lane = lane
-                                TypeToken = typeText
+                                TypeToken = fields[2].Trim()
                                 Line = line
                             }
                             :: state.Notes
                     }
             }
-        | _ -> Error(UrcError.Syntax(line, $"note needs 3 fields, got {List.length fields}"))
+        | count -> Error(UrcError.Syntax(line, $"note needs 3 fields, got {count}"))

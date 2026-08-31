@@ -1,5 +1,6 @@
-﻿namespace UrcConverter.Sources
+namespace UrcConverter.Sources
 
+open FsToolkit.ErrorHandling
 open UrcConverter
 
 module internal Shared =
@@ -11,16 +12,7 @@ module internal Shared =
             int (value - 0.5)
 
     let sequence (results: Result<'a, UrcError> list) : Result<'a list, UrcError> =
-        let add result value =
-            match result, value with
-            | Result.Ok values, Result.Ok value -> Result.Ok(value :: values)
-            | Result.Error error, _ -> Result.Error error
-            | _, Result.Error error -> Result.Error error
-
-        results |> List.fold add (Result.Ok []) |> Result.map List.rev
-
-    let tryAt (index: int) (items: 'a list) : 'a option =
-        List.tryItem index items
+        List.sequenceResultM results
 
     type private TimingEvent =
         | BpmPoint of time: int * index: int * bpm: float * beats: int
