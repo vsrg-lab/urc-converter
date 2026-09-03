@@ -16,35 +16,32 @@ module Parse =
             Branches: uint64 list option
         }
 
-    type private JavaRandom =
-        {
-            mutable State: uint64
-        }
-
+    [<RequireQualifiedAccess>]
     module private JavaRandom =
-        let mask = (1UL <<< 48) - 1UL
-        let mult = 0x5DEECE66DUL
-        let add = 0xBUL
+        let private mask = (1UL <<< 48) - 1UL
+        let private mult = 0x5DEECE66DUL
+        let private add = 0xBUL
 
-        let create (seed: int64) : JavaRandom =
-            { State = ((uint64 seed) ^^^ mult) &&& mask }
+        let create (seed: int64) : uint64 =
+            ((uint64 seed) ^^^ mult) &&& mask
 
-        let next (rng: JavaRandom) (bits: int) : uint64 =
-            rng.State <- ((rng.State * mult) + add) &&& mask
-            rng.State >>> (48 - bits)
+        let next (state: uint64) (bits: int) : uint64 * uint64 =
+            let nextState = ((state * mult) + add) &&& mask
+            (nextState >>> (48 - bits)), nextState
 
-        let nextInt (rng: JavaRandom) (bound: uint64) : uint64 =
+        let nextInt (state: uint64) (bound: uint64) : uint64 * uint64 =
             if (bound &&& (~~~bound + 1UL)) = bound then
-                (bound * (next rng 31)) >>> 31
+                let raw, s1 = next state 31
+                ((bound * raw) >>> 31), s1
             else
-                let rec loop () =
-                    let bits = next rng 31
+                let rec loop currState =
+                    let bits, s1 = next currState 31
                     let value = bits % bound
                     if bits - value + (bound - 1UL) <= 0x7FFFFFFFUL then
-                        value
+                        value, s1
                     else
-                        loop ()
-                loop ()
+                        loop s1
+                loop state
 
     let private decode (bytes: byte[]) : Result<string, UrcError> =
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)
@@ -117,13 +114,22 @@ module Parse =
                 return { chart with Measures = Map.add measure updatedMeasureMap chart.Measures }
         }
 
+    type private LoopState =
+        {
+            Chart: BmsChart
+            Frames: (bool * bool) list
+            RandomValue: uint64 option
+            BranchIndex: int
+            Rng: uint64 option
+        }
+
     let parseBms (data: byte[]) (options: ParseOptions) : Result<BmsChart, UrcError> =
         result {
             let! text = decode data
             let! b = scanBase text
             let lines = text.TrimStart('\uFEFF').Split([| "\r\n"; "\n"; "\r" |], StringSplitOptions.None)
 
-            let mutable chart =
+            let initialChart =
                 {
                     Pms = options.Pms
                     Base = b
@@ -140,104 +146,132 @@ module Parse =
                     Measures = Map.empty
                 }
 
-            let rng = options.Seed |> Option.map JavaRandom.create
-            let mutable frames: (bool * bool) list = []
-            let mutable randomValue: uint64 option = None
-            let mutable branchIndex = 0
+            let initialLoop =
+                {
+                    Chart = initialChart
+                    Frames = []
+                    RandomValue = None
+                    BranchIndex = 0
+                    Rng = options.Seed |> Option.map JavaRandom.create
+                }
 
-            for i in 0 .. lines.Length - 1 do
-                let lineNo = i + 1
-                let line = lines[i].Trim()
-                if line.StartsWith("#") then
-                    let head = line.Substring(1)
-                    if head.Length >= 6 && Char.IsDigit(head[0]) && Char.IsDigit(head[1]) && Char.IsDigit(head[2]) && head[5] = ':' then
-                        if not (frames |> List.exists fst) then
-                            let measure = Int32.Parse(head.Substring(0, 3))
-                            let channel = head.Substring(3, 2)
-                            let payload = head.Substring(6)
-                            let! updated = addMessage chart measure channel payload lineNo
-                            chart <- updated
+            let rec step (state: LoopState) (idx: int) : Result<BmsChart, UrcError> =
+                if idx >= lines.Length then
+                    if not (List.isEmpty state.Frames) then
+                        Result.Error(UrcError.Syntax(1, "unterminated #IF block"))
                     else
-                        let spaceIdx = head.IndexOf(' ')
-                        let command = if spaceIdx = -1 then head else head.Substring(0, spaceIdx)
-                        let argument = if spaceIdx = -1 then "" else head.Substring(spaceIdx + 1).Trim()
-                        let word = command.ToUpperInvariant()
+                        Result.Ok state.Chart
+                else
+                    let lineNo = idx + 1
+                    let line = lines[idx].Trim()
+                    if not (line.StartsWith("#")) then
+                        step state (idx + 1)
+                    else
+                        let head = line.Substring(1)
+                        if head.Length >= 6 && Char.IsDigit(head[0]) && Char.IsDigit(head[1]) && Char.IsDigit(head[2]) && head[5] = ':' then
+                            if not (state.Frames |> List.exists fst) then
+                                match Int32.TryParse(head.Substring(0, 3)) with
+                                | true, measure ->
+                                    let channel = head.Substring(3, 2)
+                                    let payload = head.Substring(6)
+                                    addMessage state.Chart measure channel payload lineNo
+                                    |> Result.bind (fun updated -> step { state with Chart = updated } (idx + 1))
+                                | false, _ ->
+                                    Result.Error(UrcError.Syntax(lineNo, $"invalid measure in header: {head}"))
+                            else
+                                step state (idx + 1)
+                        else
+                            let spaceIdx = head.IndexOf(' ')
+                            let command = if spaceIdx = -1 then head else head.Substring(0, spaceIdx)
+                            let argument = if spaceIdx = -1 then "" else head.Substring(spaceIdx + 1).Trim()
+                            let word = command.ToUpperInvariant()
 
-                        match word with
-                        | "RANDOM" ->
-                            let! count = toInt argument lineNo "#RANDOM"
-                            if count < 1 then
-                                return! Result.Error(UrcError.Syntax(lineNo, $"#RANDOM count must be >= 1: {count}"))
-                            let! pick =
-                                match options.Branches with
-                                | Some branches when branchIndex < branches.Length ->
-                                    let p = branches[branchIndex]
-                                    if p < 1UL || p > uint64 count then
-                                        Result.Error(UrcError.Syntax(lineNo, $"branch pick out of range: {p}"))
-                                    else
-                                        Result.Ok p
+                            result {
+                                match word with
+                                | "RANDOM" ->
+                                    let! count = toInt argument lineNo "#RANDOM"
+                                    if count < 1 then
+                                        return! Result.Error(UrcError.Syntax(lineNo, $"#RANDOM count must be >= 1: {count}"))
+                                    let! pick, nextRng =
+                                        match options.Branches with
+                                        | Some branches when state.BranchIndex < branches.Length ->
+                                            let p = branches[state.BranchIndex]
+                                            if p < 1UL || p > uint64 count then
+                                                Result.Error(UrcError.Syntax(lineNo, $"branch pick out of range: {p}"))
+                                            else
+                                                Result.Ok(p, state.Rng)
+                                        | _ ->
+                                            match state.Rng with
+                                            | Some r ->
+                                                let v, nextR = JavaRandom.nextInt r (uint64 count)
+                                                Result.Ok(v + 1UL, Some nextR)
+                                            | None -> Result.Ok(1UL, None)
+                                    return! step { state with RandomValue = Some pick; BranchIndex = state.BranchIndex + 1; Rng = nextRng } (idx + 1)
+                                | "IF" ->
+                                    let! v =
+                                        state.RandomValue
+                                        |> Option.map Result.Ok
+                                        |> Option.defaultValue (Result.Error(UrcError.Syntax(lineNo, "unmatched #IF")))
+                                    let! cond = toInt argument lineNo "#IF"
+                                    let frames = (v <> uint64 cond, v = uint64 cond) :: state.Frames
+                                    return! step { state with Frames = frames } (idx + 1)
+                                | "ELSEIF" ->
+                                    match state.Frames with
+                                    | [] -> return! Result.Error(UrcError.Syntax(lineNo, "unmatched #ELSEIF"))
+                                    | (active, matched) :: rest ->
+                                        let! cond = toInt argument lineNo "#ELSEIF"
+                                        let v = state.RandomValue.Value
+                                        let nowMatched = matched || v = uint64 cond
+                                        return! step { state with Frames = (not nowMatched, nowMatched) :: rest } (idx + 1)
+                                | "ELSE" ->
+                                    match state.Frames with
+                                    | [] -> return! Result.Error(UrcError.Syntax(lineNo, "unmatched #ELSE"))
+                                    | (active, matched) :: rest ->
+                                        return! step { state with Frames = (matched, true) :: rest } (idx + 1)
+                                | "ENDIF" ->
+                                    match state.Frames with
+                                    | [] -> return! Result.Error(UrcError.Syntax(lineNo, "unmatched #ENDIF"))
+                                    | _ :: rest -> return! step { state with Frames = rest } (idx + 1)
+                                | "SETRANDOM" | "ENDRANDOM" | "SWITCH" | "CASE" | "SKIP" | "DEF" | "ENDSW" | "SETSWITCH" ->
+                                    return! Result.Error(UrcError.UnsupportedVersion(lineNo, $"unsupported BMS command: #{command}"))
+                                | _ when state.Frames |> List.exists fst ->
+                                    return! step state (idx + 1)
+                                | "BPM" ->
+                                    let! bpm = toFloat argument lineNo "#BPM"
+                                    return! step { state with Chart = { state.Chart with Bpm = Some bpm } } (idx + 1)
+                                | _ when (command.Length = 5 && command.StartsWith("BPM", StringComparison.OrdinalIgnoreCase))
+                                      || (command.Length = 8 && command.StartsWith("EXBPM", StringComparison.OrdinalIgnoreCase)) ->
+                                    let! bpm = toFloat argument lineNo command
+                                    let chart = { state.Chart with BpmDefs = Map.add (command.Substring(command.Length - 2)) bpm state.Chart.BpmDefs }
+                                    return! step { state with Chart = chart } (idx + 1)
+                                | _ when command.Length = 6 && command.StartsWith("STOP", StringComparison.OrdinalIgnoreCase) ->
+                                    let! stop = toFloat argument lineNo command
+                                    let chart = { state.Chart with StopDefs = Map.add (command.Substring(command.Length - 2)) (abs stop / 192.0) state.Chart.StopDefs }
+                                    return! step { state with Chart = chart } (idx + 1)
+                                | _ when command.Length = 8 && command.StartsWith("SCROLL", StringComparison.OrdinalIgnoreCase) ->
+                                    let! scroll = toFloat argument lineNo command
+                                    let chart = { state.Chart with ScrollDefs = Map.add (command.Substring(command.Length - 2)) scroll state.Chart.ScrollDefs }
+                                    return! step { state with Chart = chart } (idx + 1)
+                                | "LNTYPE" ->
+                                    let! lntype = toInt argument lineNo "#LNTYPE"
+                                    if lntype <> 1 && lntype <> 2 then
+                                        return! Result.Error(UrcError.Syntax(lineNo, $"unsupported #LNTYPE: {lntype}"))
+                                    return! step { state with Chart = { state.Chart with LnType = lntype } } (idx + 1)
+                                | "LNOBJ" ->
+                                    let chart = { state.Chart with LnObj = if String.IsNullOrEmpty argument then None else Some argument }
+                                    return! step { state with Chart = chart } (idx + 1)
+                                | "TITLE" ->
+                                    let chart = { state.Chart with Title = if String.IsNullOrEmpty argument then None else Some argument }
+                                    return! step { state with Chart = chart } (idx + 1)
+                                | "ARTIST" ->
+                                    let chart = { state.Chart with Artist = if String.IsNullOrEmpty argument then None else Some argument }
+                                    return! step { state with Chart = chart } (idx + 1)
+                                | "PLAYLEVEL" ->
+                                    let chart = { state.Chart with PlayLevel = if String.IsNullOrEmpty argument then None else Some argument }
+                                    return! step { state with Chart = chart } (idx + 1)
                                 | _ ->
-                                    match rng with
-                                    | Some r -> Result.Ok (JavaRandom.nextInt r (uint64 count) + 1UL)
-                                    | None -> Result.Ok 1UL
-                            randomValue <- Some pick
-                            branchIndex <- branchIndex + 1
-                        | "IF" ->
-                            let! v =
-                                randomValue
-                                |> Option.map Result.Ok
-                                |> Option.defaultValue (Result.Error(UrcError.Syntax(lineNo, "unmatched #IF")))
-                            let! cond = toInt argument lineNo "#IF"
-                            frames <- (v <> uint64 cond, v = uint64 cond) :: frames
-                        | "ELSEIF" ->
-                            match frames with
-                            | [] -> return! Result.Error(UrcError.Syntax(lineNo, "unmatched #ELSEIF"))
-                            | (active, matched) :: rest ->
-                                let! cond = toInt argument lineNo "#ELSEIF"
-                                let v = randomValue.Value
-                                let nowMatched = matched || v = uint64 cond
-                                frames <- (not nowMatched, nowMatched) :: rest
-                        | "ELSE" ->
-                            match frames with
-                            | [] -> return! Result.Error(UrcError.Syntax(lineNo, "unmatched #ELSE"))
-                            | (active, matched) :: rest ->
-                                frames <- (matched, true) :: rest
-                        | "ENDIF" ->
-                            match frames with
-                            | [] -> return! Result.Error(UrcError.Syntax(lineNo, "unmatched #ENDIF"))
-                            | _ :: rest -> frames <- rest
-                        | "SETRANDOM" | "ENDRANDOM" | "SWITCH" | "CASE" | "SKIP" | "DEF" | "ENDSW" | "SETSWITCH" ->
-                            return! Result.Error(UrcError.UnsupportedVersion(lineNo, $"unsupported BMS command: #{command}"))
-                        | _ when frames |> List.exists fst -> ()
-                        | "BPM" ->
-                            let! bpm = toFloat argument lineNo "#BPM"
-                            chart <- { chart with Bpm = Some bpm }
-                        | _ when (command.Length = 5 && command.StartsWith("BPM", StringComparison.OrdinalIgnoreCase))
-                              || (command.Length = 8 && command.StartsWith("EXBPM", StringComparison.OrdinalIgnoreCase)) ->
-                            let! bpm = toFloat argument lineNo command
-                            chart <- { chart with BpmDefs = Map.add (command.Substring(command.Length - 2)) bpm chart.BpmDefs }
-                        | _ when command.Length = 6 && command.StartsWith("STOP", StringComparison.OrdinalIgnoreCase) ->
-                            let! stop = toFloat argument lineNo command
-                            chart <- { chart with StopDefs = Map.add (command.Substring(command.Length - 2)) (abs stop / 192.0) chart.StopDefs }
-                        | _ when command.Length = 8 && command.StartsWith("SCROLL", StringComparison.OrdinalIgnoreCase) ->
-                            let! scroll = toFloat argument lineNo command
-                            chart <- { chart with ScrollDefs = Map.add (command.Substring(command.Length - 2)) scroll chart.ScrollDefs }
-                        | "LNTYPE" ->
-                            let! lntype = toInt argument lineNo "#LNTYPE"
-                            if lntype <> 1 && lntype <> 2 then
-                                return! Result.Error(UrcError.Syntax(lineNo, $"unsupported #LNTYPE: {lntype}"))
-                            chart <- { chart with LnType = lntype }
-                        | "LNOBJ" ->
-                            chart <- { chart with LnObj = if String.IsNullOrEmpty argument then None else Some argument }
-                        | "TITLE" ->
-                            chart <- { chart with Title = if String.IsNullOrEmpty argument then None else Some argument }
-                        | "ARTIST" ->
-                            chart <- { chart with Artist = if String.IsNullOrEmpty argument then None else Some argument }
-                        | "PLAYLEVEL" ->
-                            chart <- { chart with PlayLevel = if String.IsNullOrEmpty argument then None else Some argument }
-                        | _ -> ()
+                                    return! step state (idx + 1)
+                            }
 
-            if not (List.isEmpty frames) then
-                return! Result.Error(UrcError.Syntax(1, "unterminated #IF block"))
-            return chart
+            return! step initialLoop 0
         }

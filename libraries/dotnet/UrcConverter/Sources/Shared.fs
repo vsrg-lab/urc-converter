@@ -94,16 +94,14 @@ module internal Shared =
                 | BpmPoint(time, _, _, _)
                 | SvPoint(time, _, _) -> time)
         let folder (state: ScanState) (time, evts) =
-            let mutable nextBpm = state.Bpm
-            let mutable nextBeats = state.Beats
-            let mutable nextMult = state.Multiplier
-            for evt in evts do
-                match evt with
-                | BpmPoint(_, _, bpm, beats) ->
-                    nextBpm <- Some bpm
-                    nextBeats <- beats
-                | SvPoint(_, _, mult) ->
-                    nextMult <- mult
+            let nextBpm, nextBeats, nextMult =
+                evts
+                |> List.fold
+                    (fun (bpm, beats, mult) -> function
+                        | BpmPoint(_, _, b, bt) -> Some b, bt, mult
+                        | SvPoint(_, _, m) -> bpm, beats, m)
+                    (state.Bpm, state.Beats, state.Multiplier)
+
             let nextState = { state with Bpm = nextBpm; Beats = nextBeats; Multiplier = nextMult }
             match nextBpm with
             | None -> nextState
@@ -178,7 +176,7 @@ module internal Shared =
             | NoteType.LE -> Result.Ok(Set.remove note.Lane openLanes)
             | _ -> Result.Ok openLanes
 
-        (Result.Ok Set.empty, List.sortBy (fun note -> note.TimestampMs, note.Lane) notes)
-        ||> List.fold (fun state note ->
-            state |> Result.bind (fun openLanes -> folder openLanes note))
+        notes
+        |> List.sortBy (fun note -> note.TimestampMs, note.Lane)
+        |> List.fold (fun res note -> res |> Result.bind (fun lanes -> folder lanes note)) (Ok Set.empty)
         |> Result.map ignore

@@ -11,6 +11,21 @@ module Parse =
     open UrcConverter.Sources
     open UrcConverter.Sources.Qua.Model
 
+    let private (|Scalar|_|) (node: YamlNode) =
+        match node with
+        | :? YamlScalarNode as scalar -> Some scalar.Value
+        | _ -> None
+
+    let private (|Mapping|_|) (node: YamlNode) =
+        match node with
+        | :? YamlMappingNode as mapping -> Some mapping
+        | _ -> None
+
+    let private (|Sequence|_|) (node: YamlNode) =
+        match node with
+        | :? YamlSequenceNode as sequence -> Some(sequence.Children |> Seq.toList)
+        | _ -> None
+
     let private tryFind (mapping: YamlMappingNode) (key: string) : YamlNode option =
         match mapping.Children.TryGetValue(YamlScalarNode(key)) with
         | true, value -> Some value
@@ -18,12 +33,10 @@ module Parse =
 
     let private number (mapping: YamlMappingNode) (key: string) : Result<float, UrcError> =
         match tryFind mapping key with
-        | Some(:? YamlScalarNode as scalar) ->
-            match
-                Double.TryParse(scalar.Value, NumberStyles.Float, CultureInfo.InvariantCulture)
-            with
+        | Some(Scalar text) ->
+            match Double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture) with
             | true, value -> Result.Ok value
-            | false, _ -> Result.Error(UrcError.Syntax(1, $"invalid {key}: '{scalar.Value}'"))
+            | false, _ -> Result.Error(UrcError.Syntax(1, $"invalid {key}: '{text}'"))
         | Some _ -> Result.Error(UrcError.Syntax(1, $"invalid {key}"))
         | None -> Result.Error(UrcError.Syntax(1, $"missing {key}"))
 
@@ -42,18 +55,16 @@ module Parse =
         : Result<YamlMappingNode list, UrcError> =
         match tryFind mapping key with
         | None -> Result.Ok []
-        | Some(:? YamlSequenceNode as sequence) ->
-            sequence.Children
-            |> Seq.toList
-            |> List.traverseResultM (fun node ->
-                match node with
-                | :? YamlMappingNode as entry -> Result.Ok entry
+        | Some(Sequence children) ->
+            children
+            |> List.traverseResultM (function
+                | Mapping entry -> Result.Ok entry
                 | _ -> Result.Error(UrcError.Syntax(1, $"{key} must be a list of mappings")))
         | Some _ -> Result.Error(UrcError.Syntax(1, $"{key} must be a list of mappings"))
 
     let private scalarText (mapping: YamlMappingNode) (key: string) : string option =
         match tryFind mapping key with
-        | Some(:? YamlScalarNode as scalar) -> Some scalar.Value
+        | Some(Scalar text) -> Some text
         | _ -> None
 
     let parse (text: string) : Result<QuaMap, UrcError> =
@@ -78,7 +89,7 @@ module Parse =
             match stream.Documents |> Seq.toList with
             | doc :: _ ->
                 match doc.RootNode with
-                | :? YamlMappingNode as root ->
+                | Mapping root ->
                     result {
                         let! mode = numberOr root "Mode" 1.0 |> Result.map int
 

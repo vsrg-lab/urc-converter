@@ -14,16 +14,10 @@ module internal Assembly =
         | "F" -> Some NoteType.F
         | _ -> None
 
-    let rec private validateNotes totalLanes (openLs: int[]) notes raws =
+    let rec private validateNotes totalLanes (openLs: Map<int, int>) notes raws =
         match raws with
         | [] ->
-            // Check if any LS is unterminated (earliest lane)
-            let rec findOpen lane =
-                if lane >= totalLanes then None
-                elif openLs[lane] <> 0 then Some(lane, openLs[lane])
-                else findOpen (lane + 1)
-
-            match findOpen 0 with
+            match openLs |> Map.toSeq |> Seq.tryHead with
             | Some(lane, lsLine) ->
                 Error(UrcError.Rule(20, lsLine, $"unterminated LS on lane {lane}"))
             | None -> Ok notes
@@ -46,10 +40,10 @@ module internal Assembly =
 
                     match noteType with
                     | NoteType.LE ->
-                        if openLs[raw.Lane] <> 0 then
-                            openLs[raw.Lane] <- 0
-                            validateNotes totalLanes openLs (note :: notes) rest
-                        else
+                        match Map.tryFind raw.Lane openLs with
+                        | Some _ ->
+                            validateNotes totalLanes (Map.remove raw.Lane openLs) (note :: notes) rest
+                        | None ->
                             Error(
                                 UrcError.Rule(
                                     20,
@@ -58,7 +52,7 @@ module internal Assembly =
                                 )
                             )
                     | NoteType.LS ->
-                        if openLs[raw.Lane] <> 0 then
+                        if Map.containsKey raw.Lane openLs then
                             Error(
                                 UrcError.Rule(
                                     21,
@@ -67,8 +61,7 @@ module internal Assembly =
                                 )
                             )
                         else
-                            openLs[raw.Lane] <- raw.Line
-                            validateNotes totalLanes openLs (note :: notes) rest
+                            validateNotes totalLanes (Map.add raw.Lane raw.Line openLs) (note :: notes) rest
                     | _ -> validateNotes totalLanes openLs (note :: notes) rest
 
     let build (state: ParseState) endLine =
@@ -88,8 +81,7 @@ module internal Assembly =
             let ordered =
                 state.Notes |> List.rev |> List.sortBy (fun raw -> raw.Timestamp, raw.Lane)
 
-            let openLsArray = Array.zeroCreate totalLanes
-            match validateNotes totalLanes openLsArray [] ordered with
+            match validateNotes totalLanes Map.empty [] ordered with
             | Error error -> Error error
             | Ok revNotes ->
                     let judgment =

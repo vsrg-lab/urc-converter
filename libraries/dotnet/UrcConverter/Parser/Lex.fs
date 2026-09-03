@@ -19,30 +19,27 @@ module internal Lex =
         | false, _ -> Error(UrcError.Syntax(line, $"invalid float: '{token}'"))
 
     let meterToken (token: string) line : Result<Meter, UrcError> =
-        let parts = token.Split('/')
-        if parts.Length = 2 then
-            match Int32.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture),
-                  Int32.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture) with
+        match token.Split('/') with
+        | [| beatsStr; noteValueStr |] ->
+            match Int32.TryParse(beatsStr, NumberStyles.None, CultureInfo.InvariantCulture),
+                  Int32.TryParse(noteValueStr, NumberStyles.None, CultureInfo.InvariantCulture) with
             | (true, beats), (true, noteValue) when beats >= 1 && noteValue >= 1 ->
                 Ok { Beats = beats; NoteValue = noteValue }
             | _ -> Error(UrcError.Rule(17, line, $"invalid meter: '{token}'"))
-        else
-            Error(UrcError.Rule(17, line, $"invalid meter: '{token}'"))
+        | _ -> Error(UrcError.Rule(17, line, $"invalid meter: '{token}'"))
 
     let layoutTypeToken (token: string) line : Result<int * int option, UrcError> =
-        if token.Contains('+') then
-            let parts = token.Split('+')
-            if parts.Length = 2 then
-                match Int32.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture),
-                      Int32.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture) with
-                | (true, keys), (true, special) -> Ok(keys, Some special)
-                | _ -> Error(UrcError.Syntax(line, $"invalid Type value: '{token}'"))
-            else
-                Error(UrcError.Syntax(line, $"invalid Type value: '{token}'"))
-        else
-            match Int32.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture) with
+        match token.Split('+') with
+        | [| keysStr; specialStr |] ->
+            match Int32.TryParse(keysStr, NumberStyles.None, CultureInfo.InvariantCulture),
+                  Int32.TryParse(specialStr, NumberStyles.None, CultureInfo.InvariantCulture) with
+            | (true, keys), (true, special) -> Ok(keys, Some special)
+            | _ -> Error(UrcError.Syntax(line, $"invalid Type value: '{token}'"))
+        | [| keysStr |] ->
+            match Int32.TryParse(keysStr, NumberStyles.None, CultureInfo.InvariantCulture) with
             | true, keys -> Ok(keys, None)
             | false, _ -> Error(UrcError.Syntax(line, $"invalid Type value: '{token}'"))
+        | _ -> Error(UrcError.Syntax(line, $"invalid Type value: '{token}'"))
 
     let private commaList emptyMessage parse (value: string) line =
         value.Split(',')

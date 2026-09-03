@@ -106,22 +106,21 @@ module internal Fields =
                 }
 
     let timingPoint (state: ParseState) (text: string) (line: int) =
-        let fields = text.Split(',')
-        match fields.Length with
-        | 3 ->
+        match text.Split(',') with
+        | [| t; b; m |] ->
             result {
-                let! timestamp = intToken (fields[0].Trim()) line
-                let! bpm = floatToken (fields[1].Trim()) line
-                let! meter = meterToken (fields[2].Trim()) line
+                let! timestamp = intToken (t.Trim()) line
+                let! bpm = floatToken (b.Trim()) line
+                let! meter = meterToken (m.Trim()) line
                 return! addTiming state timestamp bpm meter None line
             }
-        | 4 ->
+        | [| t; b; m; mult |] ->
             result {
-                let! timestamp = intToken (fields[0].Trim()) line
-                let! bpm = floatToken (fields[1].Trim()) line
-                let! meter = meterToken (fields[2].Trim()) line
+                let! timestamp = intToken (t.Trim()) line
+                let! bpm = floatToken (b.Trim()) line
+                let! meter = meterToken (m.Trim()) line
 
-                let multiplierText = fields[3].Trim()
+                let multiplierText = mult.Trim()
                 // A trailing comma leaves an empty 4th field; the spec reads it as "no multiplier".
                 let! multiplier =
                     if multiplierText = "" then
@@ -131,18 +130,17 @@ module internal Fields =
 
                 return! addTiming state timestamp bpm meter multiplier line
             }
-        | count ->
+        | fields ->
             Error(
-                UrcError.Syntax(line, $"timing point needs 3 or 4 fields, got {count}")
+                UrcError.Syntax(line, $"timing point needs 3 or 4 fields, got {fields.Length}")
             )
 
     let noteLine (state: ParseState) (text: string) (line: int) =
-        let fields = text.Split(',')
-        match fields.Length with
-        | 3 ->
+        match text.Split(',') with
+        | [| t; l; typeToken |] ->
             result {
-                let! timestamp = intToken (fields[0].Trim()) line
-                let! lane = intToken (fields[1].Trim()) line
+                let! timestamp = intToken (t.Trim()) line
+                let! lane = intToken (l.Trim()) line
 
                 return
                     { state with
@@ -150,10 +148,10 @@ module internal Fields =
                             {
                                 Timestamp = timestamp
                                 Lane = lane
-                                TypeToken = fields[2].Trim()
+                                TypeToken = typeToken.Trim()
                                 Line = line
                             }
                             :: state.Notes
                     }
             }
-        | count -> Error(UrcError.Syntax(line, $"note needs 3 fields, got {count}"))
+        | fields -> Error(UrcError.Syntax(line, $"note needs 3 fields, got {fields.Length}"))

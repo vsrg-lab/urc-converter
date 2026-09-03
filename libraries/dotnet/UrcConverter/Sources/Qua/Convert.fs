@@ -118,7 +118,7 @@ module Convert =
 
                 let missingText = missing |> String.concat ", "
 
-                if missing <> [] then
+                if not (List.isEmpty missing) then
                     return! Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
 
                 match qua.Title, qua.Artist, qua.Creator, qua.DifficultyName with

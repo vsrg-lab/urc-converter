@@ -41,15 +41,13 @@ module Convert =
                     (second >= '6' && second <= '9') || (side = 1 && second = '1'))
             if is18 then "PMS18" else "PMS9"
         else
-            let mutable seven = false
-            let mutable double = false
-            for side, second in used do
-                if second = '8' || second = '9' then seven <- true
-                if side = 1 then double <- true
-            if seven && double then "14K"
-            elif double then "10K"
-            elif seven then "7K"
-            else "5K"
+            let seven = used |> Set.exists (fun (_, second) -> second = '8' || second = '9')
+            let isDouble = used |> Set.exists (fun (side, _) -> side = 1)
+            match seven, isDouble with
+            | true, true -> "14K"
+            | false, true -> "10K"
+            | true, false -> "7K"
+            | false, false -> "5K"
 
     let private getLane (mode: string) (channel: string) : int option =
         if channel.Length <> 2 then None
@@ -80,77 +78,81 @@ module Convert =
             | _ -> None
 
     let private pairLongNotes (chart: BmsChart) (stream: (float * string) list) (lane: int) : Result<(int * int * NoteType) list, UrcError> =
-        let mutable start: float option = None
-        let mutable notes: (int * int * NoteType) list = []
-
-        if chart.LnType = 1 then
-            for time, obj in stream do
+        let folder (start, notes) (time, obj) =
+            if chart.LnType = 1 then
                 if obj <> "00" then
                     match start with
-                    | None -> start <- Some time
+                    | None -> Some time, notes
                     | Some s ->
-                        notes <- (Shared.roundMs (s / 1000.0), lane, NoteType.LS) :: notes
-                        notes <- (Shared.roundMs (time / 1000.0), lane, NoteType.LE) :: notes
-                        start <- None
-        else
-            for time, obj in stream do
+                        let ls = (Shared.roundMs (s / 1000.0), lane, NoteType.LS)
+                        let le = (Shared.roundMs (time / 1000.0), lane, NoteType.LE)
+                        None, le :: ls :: notes
+                else
+                    start, notes
+            else
                 if obj = "00" then
                     match start with
                     | Some s ->
-                        notes <- (Shared.roundMs (s / 1000.0), lane, NoteType.LS) :: notes
-                        notes <- (Shared.roundMs (time / 1000.0), lane, NoteType.LE) :: notes
-                        start <- None
-                    | None -> ()
+                        let ls = (Shared.roundMs (s / 1000.0), lane, NoteType.LS)
+                        let le = (Shared.roundMs (time / 1000.0), lane, NoteType.LE)
+                        None, le :: ls :: notes
+                    | None -> None, notes
                 elif Option.isNone start then
-                    start <- Some time
+                    Some time, notes
+                else
+                    start, notes
 
-        match start with
+        let finalStart, finalNotes = stream |> List.fold folder (None, [])
+        match finalStart with
         | Some _ -> Result.Error(UrcError.Syntax(1, $"long note on lane {lane} has no end"))
-        | None -> Result.Ok(List.rev notes)
+        | None -> Result.Ok(List.rev finalNotes)
 
     let private buildNotes
         (chart: BmsChart)
         (mode: string)
         (objects: (float * string * string) list)
-        (timed: float[])
+        (timed: Map<int, float>)
         : Result<(int * int * NoteType) list, UrcError> =
-        result {
-            let streams =
-                objects
-                |> List.indexed
-                |> List.groupBy (fun (_, (_, channel, _)) -> channel)
-                |> List.map (fun (channel, group) ->
-                    channel, group |> List.map (fun (idx, (_, _, obj)) -> timed[idx], obj))
+        let streams =
+            objects
+            |> List.indexed
+            |> List.groupBy (fun (_, (_, channel, _)) -> channel)
+            |> List.map (fun (channel, group) ->
+                channel, group |> List.map (fun (idx, (_, _, obj)) -> Map.find idx timed, obj))
 
-            let mutable allNotes = []
-            for channel, stream in streams do
-                match getLane mode channel, channelKind channel with
-                | Some lane, Some "mine" ->
-                    for time, _ in stream do
-                        allNotes <- (Shared.roundMs (time / 1000.0), lane, NoteType.M) :: allNotes
-                | Some lane, Some "ln" ->
-                    let! paired = pairLongNotes chart stream lane
-                    allNotes <- (List.rev paired) @ allNotes
-                | Some lane, Some _ ->
-                    let mutable pending = None
-                    for time, obj in stream do
-                        match chart.LnObj, pending with
-                        | Some lnobj, Some p when obj = lnobj ->
-                            allNotes <- (Shared.roundMs (p / 1000.0), lane, NoteType.LS) :: allNotes
-                            allNotes <- (Shared.roundMs (time / 1000.0), lane, NoteType.LE) :: allNotes
-                            pending <- None
-                        | _ ->
+        let channelNotes (channel, stream) : Result<(int * int * NoteType) list, UrcError> =
+            match getLane mode channel, channelKind channel with
+            | Some lane, Some "mine" ->
+                stream
+                |> List.map (fun (time, _) -> (Shared.roundMs (time / 1000.0), lane, NoteType.M))
+                |> Result.Ok
+            | Some lane, Some "ln" ->
+                pairLongNotes chart stream lane
+            | Some lane, Some _ ->
+                let folder (pending, notes) (time, obj) =
+                    match chart.LnObj, pending with
+                    | Some lnobj, Some p when obj = lnobj ->
+                        let ls = (Shared.roundMs (p / 1000.0), lane, NoteType.LS)
+                        let le = (Shared.roundMs (time / 1000.0), lane, NoteType.LE)
+                        None, le :: ls :: notes
+                    | _ ->
+                        let acc =
                             match pending with
-                            | Some p -> allNotes <- (Shared.roundMs (p / 1000.0), lane, NoteType.N) :: allNotes
-                            | None -> ()
-                            pending <- Some time
-                    match pending with
-                    | Some p -> allNotes <- (Shared.roundMs (p / 1000.0), lane, NoteType.N) :: allNotes
-                    | None -> ()
-                | _ -> ()
+                            | Some p -> (Shared.roundMs (p / 1000.0), lane, NoteType.N) :: notes
+                            | None -> notes
+                        Some time, acc
 
-            return List.rev allNotes
-        }
+                let lastPending, foldedNotes = stream |> List.fold folder (None, [])
+                let finalNotes =
+                    match lastPending with
+                    | Some p -> (Shared.roundMs (p / 1000.0), lane, NoteType.N) :: foldedNotes
+                    | None -> foldedNotes
+                Result.Ok (List.rev finalNotes)
+            | _ -> Result.Ok []
+
+        streams
+        |> List.traverseResultM channelNotes
+        |> Result.map List.concat
 
     [<RequireQualifiedAccess>]
     type private EntryKind =
@@ -160,6 +162,26 @@ module Convert =
         | Scroll of float
         | Object of int
         | Anchor
+
+    type private ScanAcc =
+        {
+            Entries: (float * int * EntryKind) list
+            Objects: (float * string * string) list
+            Used: Set<int * char>
+        }
+
+    type private TimingScanState =
+        {
+            TimeUs: float
+            PrevY: float
+            PendingStop: float
+            CurrentBpm: float option
+            CurrentBeats: int
+            BpmPoints: (int * float * int) list
+            SvPoints: (int * float) list
+            Anchors: int list
+            Timed: Map<int, float>
+        }
 
     let convertBms (chart: BmsChart) : Result<Chart, UrcError> =
         result {
@@ -173,116 +195,169 @@ module Convert =
                 |> Map.keys
                 |> Seq.fold max -1
 
-            let boundaries = Array.zeroCreate (maxMeasure + 2)
-            boundaries[0] <- 0.0
-            for m in 0 .. maxMeasure do
-                let rate = Map.tryFind m chart.Rates |> Option.defaultValue 1.0
-                boundaries[m + 1] <- boundaries[m] + rate
+            let boundaries =
+                [| 0 .. maxMeasure |]
+                |> Array.scan (fun acc m ->
+                    let rate = Map.tryFind m chart.Rates |> Option.defaultValue 1.0
+                    acc + rate) 0.0
 
-            let mutable entries: (float * int * EntryKind) list = [ (0.0, 0, EntryKind.Bpm bpmInitial) ]
-            let mutable objects: (float * string * string) list = []
-            let mutable used: Set<int * char> = Set.empty
+            let initialAcc =
+                {
+                    Entries = [ (0.0, 0, EntryKind.Bpm bpmInitial) ]
+                    Objects = []
+                    Used = Set.empty
+                }
 
-            for m in 0 .. maxMeasure do
-                let rate = Map.tryFind m chart.Rates |> Option.defaultValue 1.0
-                let prevRate = Map.tryFind (m - 1) chart.Rates |> Option.defaultValue 1.0
-                if rate <> prevRate then
-                    let beats = rate * 4.0
-                    if abs (beats - round beats) < 1e-9 && round beats >= 1.0 then
-                        entries <- (boundaries[m], 3, EntryKind.Meter (int (round beats))) :: entries
+            let rec scanMeasures (acc: ScanAcc) (m: int) : Result<ScanAcc, UrcError> =
+                if m > maxMeasure then
+                    Result.Ok { acc with Objects = List.rev acc.Objects }
+                else
+                    let rate = Map.tryFind m chart.Rates |> Option.defaultValue 1.0
+                    let prevRate = Map.tryFind (m - 1) chart.Rates |> Option.defaultValue 1.0
+                    let meterEntries =
+                        if rate <> prevRate then
+                            let beats = rate * 4.0
+                            if abs (beats - round beats) < 1e-9 && round beats >= 1.0 then
+                                [ (boundaries[m], 3, EntryKind.Meter (int (round beats))) ]
+                            else []
+                        else []
 
-                match Map.tryFind m chart.Measures with
-                | None -> ()
-                | Some measureMap ->
-                    for KeyValue(channel, ids) in measureMap do
-                        for idx in 0 .. ids.Length - 1 do
-                            let obj = ids[idx]
-                            let y = boundaries[m] + (float idx / float ids.Length) * rate
+                    let accWithMeter = { acc with Entries = meterEntries @ acc.Entries }
 
-                            if Set.contains channel systemChannels then
-                                if obj <> "00" then
-                                    match channel with
-                                    | "03" ->
-                                        let digits = idValue obj chart.Base
-                                        let bpmVal = float ((digits / 36) * 16 + (digits % 36))
-                                        entries <- (y, 0, EntryKind.Bpm bpmVal) :: entries
-                                    | "08" ->
-                                        match Map.tryFind obj chart.BpmDefs with
-                                        | Some bpmVal -> entries <- (y, 0, EntryKind.Bpm bpmVal) :: entries
-                                        | None -> return! Result.Error(UrcError.Syntax(1, $"undefined #BPM{obj}"))
-                                    | "09" ->
-                                        match Map.tryFind obj chart.StopDefs with
-                                        | Some stopVal -> entries <- (y, 1, EntryKind.Stop stopVal) :: entries
-                                        | None -> return! Result.Error(UrcError.Syntax(1, $"undefined #STOP{obj}"))
-                                    | _ ->
-                                        match Map.tryFind obj chart.ScrollDefs with
-                                        | Some scrollVal -> entries <- (y, 2, EntryKind.Scroll scrollVal) :: entries
-                                        | None -> return! Result.Error(UrcError.Syntax(1, $"undefined #SCROLL{obj}"))
-                            else
-                                match channelKind channel with
-                                | None -> ()
-                                | Some kind ->
-                                    if obj <> "00" then
-                                        used <- Set.add (sideOf channel[0], channel[1]) used
-                                    if not (obj = "00" && kind <> "ln") then
-                                        let objIdx = objects.Length
-                                        objects <- objects @ [ (y, channel, obj) ]
-                                        entries <- (y, 4, EntryKind.Object objIdx) :: entries
+                    match Map.tryFind m chart.Measures with
+                    | None -> scanMeasures accWithMeter (m + 1)
+                    | Some measureMap ->
+                        let rec scanChannels (cAcc: ScanAcc) (channels: (string * string list) list) : Result<ScanAcc, UrcError> =
+                            match channels with
+                            | [] -> Result.Ok cAcc
+                            | (channel, ids) :: restChannels ->
+                                let rec scanIds (iAcc: ScanAcc) (idx: int) : Result<ScanAcc, UrcError> =
+                                    if idx >= ids.Length then
+                                        Result.Ok iAcc
+                                    else
+                                        let obj = ids[idx]
+                                        let y = boundaries[m] + (float idx / float ids.Length) * rate
+                                        if Set.contains channel systemChannels then
+                                            if obj <> "00" then
+                                                match channel with
+                                                | "03" ->
+                                                    let digits = idValue obj chart.Base
+                                                    let bpmVal = float ((digits / 36) * 16 + (digits % 36))
+                                                    scanIds { iAcc with Entries = (y, 0, EntryKind.Bpm bpmVal) :: iAcc.Entries } (idx + 1)
+                                                | "08" ->
+                                                    match Map.tryFind obj chart.BpmDefs with
+                                                    | Some bpmVal -> scanIds { iAcc with Entries = (y, 0, EntryKind.Bpm bpmVal) :: iAcc.Entries } (idx + 1)
+                                                    | None -> Result.Error(UrcError.Syntax(1, $"undefined #BPM{obj}"))
+                                                | "09" ->
+                                                    match Map.tryFind obj chart.StopDefs with
+                                                    | Some stopVal -> scanIds { iAcc with Entries = (y, 1, EntryKind.Stop stopVal) :: iAcc.Entries } (idx + 1)
+                                                    | None -> Result.Error(UrcError.Syntax(1, $"undefined #STOP{obj}"))
+                                                | _ ->
+                                                    match Map.tryFind obj chart.ScrollDefs with
+                                                    | Some scrollVal -> scanIds { iAcc with Entries = (y, 2, EntryKind.Scroll scrollVal) :: iAcc.Entries } (idx + 1)
+                                                    | None -> Result.Error(UrcError.Syntax(1, $"undefined #SCROLL{obj}"))
+                                            else
+                                                scanIds iAcc (idx + 1)
+                                        else
+                                            match channelKind channel with
+                                            | None -> scanIds iAcc (idx + 1)
+                                            | Some kind ->
+                                                let used =
+                                                    if obj <> "00" then Set.add (sideOf channel[0], channel[1]) iAcc.Used
+                                                    else iAcc.Used
+                                                if not (obj = "00" && kind <> "ln") then
+                                                    let objIdx = iAcc.Objects.Length
+                                                    let objects = (y, channel, obj) :: iAcc.Objects
+                                                    let entries = (y, 4, EntryKind.Object objIdx) :: iAcc.Entries
+                                                    scanIds { Entries = entries; Objects = objects; Used = used } (idx + 1)
+                                                else
+                                                    scanIds { iAcc with Used = used } (idx + 1)
 
-            let mode = detectMode chart.Pms used
+                                match scanIds cAcc 0 with
+                                | Result.Ok nextAcc -> scanChannels nextAcc restChannels
+                                | Result.Error err -> Result.Error err
 
-            let anchors = ResizeArray<int>()
+                        match scanChannels accWithMeter (Map.toList measureMap) with
+                        | Result.Ok nextAcc -> scanMeasures nextAcc (m + 1)
+                        | Result.Error err -> Result.Error err
+
+            let! scanned = scanMeasures initialAcc 0
+            let mode = detectMode chart.Pms scanned.Used
+
             let sortedEntries =
                 (boundaries
                  |> Seq.map (fun y -> y, 5, EntryKind.Anchor)
                  |> List.ofSeq)
-                @ entries
+                @ scanned.Entries
                 |> List.sortBy (fun (y, order, _) -> y, order)
 
             let groupedEntries =
                 sortedEntries
                 |> List.groupBy (fun (y, _, _) -> y)
 
-            let timed = Array.zeroCreate objects.Length
-            let mutable currentBpm = None
-            let mutable currentBeats = 4
-            let mutable timeUs = 0.0
-            let mutable prevY = 0.0
-            let mutable pendingStop = 0.0
-            let mutable bpmPoints: (int * float * int) list = []
-            let mutable svPoints: (int * float) list = []
+            let initialTiming =
+                {
+                    TimeUs = 0.0
+                    PrevY = 0.0
+                    PendingStop = 0.0
+                    CurrentBpm = None
+                    CurrentBeats = 4
+                    BpmPoints = []
+                    SvPoints = []
+                    Anchors = []
+                    Timed = Map.empty
+                }
 
-            for y, group in groupedEntries do
-                match currentBpm with
-                | Some b -> timeUs <- timeUs + (MeasureUs * (y - prevY) / b)
-                | None -> ()
-                timeUs <- timeUs + pendingStop
-                pendingStop <- 0.0
+            let foldTimingGroup (state: TimingScanState) (y: float, group: (float * int * EntryKind) list) =
+                let timeUs =
+                    match state.CurrentBpm with
+                    | Some b -> state.TimeUs + (MeasureUs * (y - state.PrevY) / b)
+                    | None -> state.TimeUs
+                    + state.PendingStop
 
-                let mutable nextBpm = currentBpm
-                let mutable nextBeats = currentBeats
-                let mutable scroll = None
+                let rec foldGroupEvents nextBpm nextBeats pendingStop scroll anchors timed (events: (float * int * EntryKind) list) =
+                    match events with
+                    | [] -> nextBpm, nextBeats, pendingStop, scroll, anchors, timed
+                    | (_, _, kind) :: rest ->
+                        match kind with
+                        | EntryKind.Bpm v -> foldGroupEvents (Some v) nextBeats pendingStop scroll anchors timed rest
+                        | EntryKind.Meter v -> foldGroupEvents nextBpm v pendingStop scroll anchors timed rest
+                        | EntryKind.Stop v ->
+                            let stopTime = MeasureUs * v / nextBpm.Value
+                            foldGroupEvents nextBpm nextBeats stopTime scroll anchors timed rest
+                        | EntryKind.Scroll v -> foldGroupEvents nextBpm nextBeats pendingStop (Some v) anchors timed rest
+                        | EntryKind.Object idx -> foldGroupEvents nextBpm nextBeats pendingStop scroll anchors (Map.add idx timeUs timed) rest
+                        | EntryKind.Anchor -> foldGroupEvents nextBpm nextBeats pendingStop scroll (Shared.roundMs (timeUs / 1000.0) :: anchors) timed rest
 
-                for _, _, kind in group do
-                    match kind with
-                    | EntryKind.Bpm v -> nextBpm <- Some v
-                    | EntryKind.Meter v -> nextBeats <- v
-                    | EntryKind.Stop v -> pendingStop <- MeasureUs * v / nextBpm.Value
-                    | EntryKind.Scroll v -> scroll <- Some v
-                    | EntryKind.Object idx -> timed[idx] <- timeUs
-                    | EntryKind.Anchor -> anchors.Add(Shared.roundMs (timeUs / 1000.0))
+                let nextBpm, nextBeats, pendingStop, scroll, nextAnchors, nextTimed =
+                    foldGroupEvents state.CurrentBpm state.CurrentBeats 0.0 None state.Anchors state.Timed group
 
-                if nextBpm <> currentBpm || nextBeats <> currentBeats then
-                    bpmPoints <- (Shared.roundMs (timeUs / 1000.0), nextBpm.Value, nextBeats) :: bpmPoints
-                match scroll with
-                | Some s -> svPoints <- (Shared.roundMs (timeUs / 1000.0), s) :: svPoints
-                | None -> ()
+                let bpmPoints =
+                    if nextBpm <> state.CurrentBpm || nextBeats <> state.CurrentBeats then
+                        (Shared.roundMs (timeUs / 1000.0), nextBpm.Value, nextBeats) :: state.BpmPoints
+                    else
+                        state.BpmPoints
 
-                currentBpm <- nextBpm
-                currentBeats <- nextBeats
-                prevY <- y
+                let svPoints =
+                    match scroll with
+                    | Some s -> (Shared.roundMs (timeUs / 1000.0), s) :: state.SvPoints
+                    | None -> state.SvPoints
 
-            let! rawNotes = buildNotes chart mode objects timed
+                {
+                    TimeUs = timeUs
+                    PrevY = y
+                    PendingStop = pendingStop
+                    CurrentBpm = nextBpm
+                    CurrentBeats = nextBeats
+                    BpmPoints = bpmPoints
+                    SvPoints = svPoints
+                    Anchors = nextAnchors
+                    Timed = nextTimed
+                }
+
+            let timingState = (initialTiming, groupedEntries) ||> List.fold foldTimingGroup
+
+            let! rawNotes = buildNotes chart mode scanned.Objects timingState.Timed
             let firstNoteTime =
                 rawNotes
                 |> List.filter (fun (_, _, t) -> t <> NoteType.LE)
@@ -291,10 +366,10 @@ module Convert =
                     | [] -> 0
                     | xs -> List.min xs
 
-            let anchorMs = anchors |> Seq.tryFind (fun time -> time >= firstNoteTime)
+            let anchorMs = timingState.Anchors |> List.rev |> List.tryFind (fun time -> time >= firstNoteTime)
 
             let! timing =
-                Shared.buildTiming (List.rev bpmPoints) (List.rev svPoints) firstNoteTime ".bms" anchorMs
+                Shared.buildTiming (List.rev timingState.BpmPoints) (List.rev timingState.SvPoints) firstNoteTime ".bms" anchorMs
 
             let typeOrder = function
                 | NoteType.N -> 0
