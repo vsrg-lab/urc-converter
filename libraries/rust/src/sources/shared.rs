@@ -14,18 +14,46 @@ pub(crate) fn round_ms(value: f64) -> i64 {
     }
 }
 
+/// First measure boundary at or after `time_ms`, assuming each BPM point
+/// anchors a measure grid. Overshooting the next point snaps to that point
+/// (the grid re-anchors there).
+pub(crate) fn first_downbeat_after(bpm_points: &[(i64, f64, u64)], time_ms: i64) -> Option<i64> {
+    let mut points = bpm_points.to_vec();
+    points.sort_by_key(|point| point.0);
+
+    for (index, &(time, bpm, beats)) in points.iter().enumerate() {
+        let next_time = points.get(index + 1).map_or(i64::MAX, |point| point.0);
+        if time_ms <= time {
+            return Some(round_ms(time as f64));
+        }
+        if time_ms < next_time {
+            let measure_ms = beats as f64 * 60000.0 / bpm;
+            if measure_ms <= 0.0 {
+                continue;
+            }
+            let k = ((time_ms - time) as f64 / measure_ms - 1e-9).ceil();
+            let anchor = time as f64 + k * measure_ms;
+            return Some(round_ms(anchor.min(next_time as f64)));
+        }
+    }
+    None
+}
+
 /// Merges BPM and SV points into shifted `@Timing` entries.
 ///
 /// `bpm_points` holds `(time_ms, bpm, beats)` and `sv_points` holds
 /// `(time_ms, multiplier)`, both in file order. Entries are emitted only when
 /// the effective `(bpm, multiplier)` pair changes, the timeline is shifted so
 /// the first note lands at 0 ms, and entries falling negative are clamped to
-/// 0 (entries sharing a timestamp keep the last state).
+/// 0 (entries sharing a timestamp keep the last state). A point is forced at
+/// `measure_anchor_ms` even without a state change so the measure grid
+/// survives the clamp.
 pub(crate) fn build_timing(
     bpm_points: &[(i64, f64, u64)],
     sv_points: &[(i64, f64)],
     first_note_time: i64,
     source: &str,
+    measure_anchor_ms: Option<i64>,
 ) -> Result<Vec<TimingPoint>> {
     let mut events: Vec<(i64, usize, bool, f64, u64)> = bpm_points
         .iter()
@@ -80,6 +108,19 @@ pub(crate) fn build_timing(
             1,
             format!("{source}: no BPM timing point"),
         ));
+    }
+
+    if let Some(anchor) = measure_anchor_ms.map(|value| round_ms(value as f64))
+        && !emitted.iter().any(|entry| entry.0 == anchor)
+    {
+        let mut active = emitted[0];
+        for entry in &emitted {
+            if entry.0 < anchor {
+                active = *entry;
+            }
+        }
+        emitted.push((anchor, active.1, active.2, active.3));
+        emitted.sort_by_key(|entry| entry.0);
     }
 
     let mut shifted: BTreeMap<i64, (f64, f64, u64)> = BTreeMap::new();

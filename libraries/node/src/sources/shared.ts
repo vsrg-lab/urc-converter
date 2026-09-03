@@ -19,13 +19,41 @@ export function roundMs(value: number): number {
 }
 
 /**
- * Merges BPM and SV points into shifted `@Timing` entries.
+ * First measure boundary at or after `timeMs`; each BPM point anchors a grid.
+ * Overshooting the next point snaps to that point (the grid re-anchors there).
+ */
+export function firstDownbeatAfter(
+	bpmPoints: Array<[number, number, number]>,
+	timeMs: number
+): number | null {
+	const points = [...bpmPoints].sort((left, right) => left[0] - right[0]);
+	for (let index = 0; index < points.length; index++) {
+		const [time, bpm, beats] = points[index];
+		const nextTime = index + 1 < points.length ? points[index + 1][0] : null;
+		if (timeMs <= time)
+			return roundMs(time);
+		if (nextTime === null || timeMs < nextTime) {
+			const measureMs = (beats * 60000) / bpm;
+			if (measureMs <= 0)
+				continue;
+			const anchor = time + Math.ceil((timeMs - time) / measureMs - 1e-9) * measureMs;
+			return roundMs(nextTime === null ? anchor : Math.min(anchor, nextTime));
+		}
+	}
+	return null;
+}
+
+/**
+ * Merges BPM and SV points into shifted `@Timing` entries. A point is forced
+ * at `measureAnchorMs` even without a state change so the measure grid
+ * survives the 0-clamp of the shift.
  */
 export function buildTiming(
 	bpmPoints: Array<[number, number, number]>,
 	svPoints: Array<[number, number]>,
 	firstNoteTime: number,
-	source: string
+	source: string,
+	measureAnchorMs: number | null = null
 ): TimingPoint[] {
 	type Event = [number, number, boolean, number, number];
 	const events: Event[] = [
@@ -68,6 +96,18 @@ export function buildTiming(
 
 	if (emitted.length === 0)
 		throw new UrcError("syntax", 1, `${source}: no BPM timing point`);
+
+	if (measureAnchorMs !== null) {
+		const anchor = roundMs(measureAnchorMs);
+		if (!emitted.some(entry => entry.time === anchor)) {
+			let active = emitted[0];
+			for (const entry of emitted)
+				if (entry.time < anchor)
+					active = entry;
+			emitted.push({ time: anchor, bpm: active.bpm, multiplier: active.multiplier, beats: active.beats });
+			emitted.sort((left, right) => left.time - right.time);
+		}
+	}
 
 	const shifted = new Map<number, RawTiming>();
 	for (const entry of emitted)

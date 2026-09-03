@@ -11,6 +11,32 @@ module internal Shared =
         else
             int (value - 0.5)
 
+    /// First measure boundary at or after timeMs; each BPM point anchors a grid.
+    /// Overshooting the next point snaps to that point (the grid re-anchors there).
+    let firstDownbeatAfter (bpmPoints: (int * float * int) list) (timeMs: int) : int option =
+        let points = bpmPoints |> List.sortBy (fun (time, _, _) -> time)
+
+        let rec loop rest =
+            match rest with
+            | [] -> None
+            | (time, bpm, beats) :: tail ->
+                let nextTime = match tail with (next, _, _) :: _ -> Some next | [] -> None
+
+                if timeMs <= time then Some(roundMs (float time))
+                else
+                    let inSegment = match nextTime with Some next -> timeMs < next | None -> true
+                    let measureMs = float beats * 60000.0 / bpm
+
+                    if inSegment && measureMs > 0.0 then
+                        let k = ceil (float (timeMs - time) / measureMs - 1e-9)
+                        let anchor = float time + k * measureMs
+
+                        Some(roundMs (match nextTime with Some next -> min anchor (float next) | None -> anchor))
+                    else
+                        loop tail
+
+        loop points
+
     let sequence (results: Result<'a, UrcError> list) : Result<'a list, UrcError> =
         List.sequenceResultM results
 
@@ -40,6 +66,7 @@ module internal Shared =
         (svPoints: (int * float) list)
         (firstNoteTime: int)
         (source: string)
+        (measureAnchorMs: int option)
         : Result<TimingPoint list, UrcError> =
         let events =
             (bpmPoints
@@ -98,6 +125,20 @@ module internal Shared =
         match List.rev scanState.Emitted with
         | [] -> Result.Error(UrcError.Syntax(1, $"{source}: no BPM timing point"))
         | emitted ->
+            // A point is forced at the anchor even without a state change so
+            // the measure grid survives the 0-clamp of the shift.
+            let emitted =
+                match measureAnchorMs with
+                | Some anchor when not (List.exists (fun point -> point.Time = anchor) emitted) ->
+                    let active =
+                        emitted
+                        |> List.tryFindBack (fun point -> point.Time < anchor)
+                        |> Option.defaultValue (List.head emitted)
+
+                    let before, after = List.partition (fun point -> point.Time < anchor) emitted
+                    before @ { Time = anchor; Bpm = active.Bpm; Multiplier = active.Multiplier; Beats = active.Beats } :: after
+                | _ -> emitted
+
             let shifted =
                 emitted
                 |> List.map (fun point ->

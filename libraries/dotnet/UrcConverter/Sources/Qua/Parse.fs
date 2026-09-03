@@ -1,58 +1,15 @@
-namespace UrcConverter.Sources
+namespace UrcConverter.Sources.Qua
 
-open System
-open System.Globalization
-open UrcConverter
+module Parse =
 
-module Qua =
-
+    open System
+    open System.Globalization
     open System.IO
     open FsToolkit.ErrorHandling
     open YamlDotNet.RepresentationModel
-
-    let private modeKeys =
-        [
-            (1, 4)
-            (2, 7)
-            (3, 1)
-            (4, 2)
-            (5, 3)
-            (6, 5)
-            (7, 6)
-            (8, 8)
-            (9, 9)
-            (10, 10)
-        ]
-
-    type TimingPoint =
-        {
-            StartTime: int
-            Bpm: float
-            Signature: int
-        }
-
-    type SvPoint = { StartTime: int; Multiplier: float }
-
-    type HitObject =
-        {
-            StartTime: int
-            Lane: int
-            EndTime: int
-            Mine: bool
-        }
-
-    type QuaMap =
-        {
-            Mode: int
-            HasScratchKey: bool
-            Title: string option
-            Artist: string option
-            Creator: string option
-            DifficultyName: string option
-            TimingPoints: TimingPoint list
-            SvPoints: SvPoint list
-            HitObjects: HitObject list
-        }
+    open UrcConverter
+    open UrcConverter.Sources
+    open UrcConverter.Sources.Qua.Model
 
     let private tryFind (mapping: YamlMappingNode) (key: string) : YamlNode option =
         match mapping.Children.TryGetValue(YamlScalarNode(key)) with
@@ -220,125 +177,3 @@ module Qua =
                     }
                 | _ -> Result.Error(UrcError.Syntax(1, ".qua must be a YAML mapping"))
             | [] -> Result.Error(UrcError.Syntax(1, ".qua has no YAML document"))
-
-    let convert (qua: QuaMap) : Result<Chart, UrcError> =
-        result {
-            match modeKeys |> List.tryFind (fun (mode, _) -> mode = qua.Mode) with
-            | None ->
-                return!
-                    Result.Error(
-                        UrcError.UnsupportedVersion(1, $"unsupported Quaver mode: {qua.Mode}")
-                    )
-            | Some(_, keys) ->
-                let specialKeys = if qua.HasScratchKey then 1 else 0
-
-                let firstNoteTime =
-                    match qua.HitObjects with
-                    | [] -> 0
-                    | objects -> objects |> List.map _.StartTime |> List.min
-
-                let! timing =
-                    Shared.buildTiming
-                        (qua.TimingPoints
-                         |> List.map (fun point -> point.StartTime, point.Bpm, point.Signature))
-                        (qua.SvPoints |> List.map (fun point -> point.StartTime, point.Multiplier))
-                        firstNoteTime
-                        ".qua"
-
-                let total = keys + specialKeys
-
-                let! notes =
-                    qua.HitObjects
-                    |> List.traverseResultM (fun obj ->
-                        let lane = obj.Lane - 1
-
-                        if lane < 0 || lane >= total then
-                            Result.Error(UrcError.Syntax(1, $"lane out of range: {obj.Lane}"))
-                        elif obj.EndTime <> 0 && obj.EndTime < obj.StartTime then
-                            Result.Error(
-                                UrcError.Syntax(
-                                    1,
-                                    $"hold ends before it starts: {obj.EndTime} < {obj.StartTime}"
-                                )
-                            )
-                        elif obj.EndTime <> 0 then
-                            Result.Ok
-                                [
-                                    {
-                                        TimestampMs = obj.StartTime - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.LS
-                                    }
-                                    {
-                                        TimestampMs = obj.EndTime - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.LE
-                                    }
-                                ]
-                        elif obj.Mine then
-                            Result.Ok
-                                [
-                                    {
-                                        TimestampMs = obj.StartTime - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.M
-                                    }
-                                ]
-                        else
-                            Result.Ok
-                                [
-                                    {
-                                        TimestampMs = obj.StartTime - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.N
-                                    }
-                                ])
-                    |> Result.map List.concat
-
-                do! Shared.checkHoldOverlap notes
-
-                let metadata =
-                    [
-                        ("Title", qua.Title)
-                        ("Artist", qua.Artist)
-                        ("Creator", qua.Creator)
-                        ("DifficultyName", qua.DifficultyName)
-                    ]
-
-                let missing =
-                    metadata
-                    |> List.choose (fun (name, value) ->
-                        match value with
-                        | Some value when value <> "" -> None
-                        | _ -> Some name)
-
-                let missingText = missing |> String.concat ", "
-
-                if missing <> [] then
-                    return! Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
-
-                match qua.Title, qua.Artist, qua.Creator, qua.DifficultyName with
-                | Some title, Some artist, Some creator, Some version ->
-                    return
-                        {
-                            FormatVersion = { Major = 1; Minor = 1 }
-                            Metadata =
-                                {
-                                    Original = "Quaver"
-                                    Title = title
-                                    Artist = artist
-                                    Creator = creator
-                                    Version = version
-                                }
-                            Judgment = None
-                            Layout =
-                                {
-                                    Keys = keys
-                                    SpecialKeys = specialKeys
-                                    SpecialLanes = if qua.HasScratchKey then Some [ keys ] else None
-                                }
-                            TimingPoints = timing
-                            Notes = notes
-                        }
-                | _ -> return! Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
-        }

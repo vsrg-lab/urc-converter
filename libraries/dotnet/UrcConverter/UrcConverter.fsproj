@@ -18,9 +18,15 @@
 		<Compile Include="Parser\Assembly.fs" />
 		<Compile Include="Parser\Scan.fs" />
 		<Compile Include="Sources\Shared.fs" />
-		<Compile Include="Sources\Bms.fs" />
-		<Compile Include="Sources\Osu.fs" />
-		<Compile Include="Sources\Qua.fs" />
+		<Compile Include="Sources\Bms\Model.fs" />
+		<Compile Include="Sources\Bms\Parse.fs" />
+		<Compile Include="Sources\Bms\Convert.fs" />
+		<Compile Include="Sources\Osu\Model.fs" />
+		<Compile Include="Sources\Osu\Parse.fs" />
+		<Compile Include="Sources\Osu\Convert.fs" />
+		<Compile Include="Sources\Qua\Model.fs" />
+		<Compile Include="Sources\Qua\Parse.fs" />
+		<Compile Include="Sources\Qua\Convert.fs" />
 		<Compile Include="Writer.fs" />
 	</ItemGroup>
 

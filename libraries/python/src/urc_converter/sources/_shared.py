@@ -1,5 +1,6 @@
 """Shared merge and validation helpers for converters."""
 
+import math
 from itertools import groupby
 
 from ..error import UrcError
@@ -10,13 +11,38 @@ def round_ms(value: float) -> int:
 	return int(value + 0.5) if value >= 0 else int(value - 0.5)
 
 
+def first_downbeat_after(
+	bpm_points: list[tuple[int, float, int]],
+	time_ms: int,
+) -> int | None:
+	"""First measure boundary at or after time_ms; each BPM point anchors a grid."""
+	points = sorted(bpm_points)
+
+	for index, (time, bpm, beats) in enumerate(points):
+		next_time = points[index + 1][0] if index + 1 < len(points) else None
+		if time_ms <= time:
+			return round_ms(time)
+		if next_time is None or time_ms < next_time:
+			measure_ms = beats * 60000.0 / bpm
+			if measure_ms <= 0:
+				continue
+			anchor = time + math.ceil((time_ms - time) / measure_ms - 1e-9) * measure_ms
+			return round_ms(min(anchor, next_time) if next_time is not None else anchor)
+	return None
+
+
 def build_timing(
 	bpm_points: list[tuple[int, float, int]],
 	sv_points: list[tuple[int, float]],
 	first_note_time: int,
 	source: str,
+	measure_anchor_ms: int | None = None,
 ) -> list[TimingPoint]:
-	"""Merge BPM and SV points into shifted @Timing entries."""
+	"""Merge BPM and SV points into shifted @Timing entries.
+
+	A point is forced at measure_anchor_ms even without a state change so the
+	measure grid survives the 0-clamp of the shift.
+	"""
 	events = sorted(
 		[(time, index, True, bpm, beats) for index, (time, bpm, beats) in enumerate(bpm_points)]
 		+ [
@@ -47,6 +73,16 @@ def build_timing(
 
 	if not emitted:
 		raise UrcError("syntax", 1, f"{source}: no BPM timing point")
+
+	if measure_anchor_ms is not None:
+		anchor = round_ms(measure_anchor_ms)
+		if all(entry[0] != anchor for entry in emitted):
+			active = emitted[0]
+			for entry in emitted:
+				if entry[0] < anchor:
+					active = entry
+			emitted.append((anchor, *active[1:]))
+			emitted.sort(key=lambda entry: entry[0])
 
 	shifted: dict[int, tuple[float, float, int]] = {}
 	for time, bpm, multiplier, beats in emitted:
