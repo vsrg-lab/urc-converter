@@ -61,11 +61,11 @@ pub fn convert_osu(beatmap: &OsuBeatmap) -> Result<Chart> {
         .min()
         .unwrap_or(0);
 
-    let bpm_points: Vec<(i64, f64, u64)> = beatmap
+    let bpm_points: Vec<(i64, f64, u64, u64)> = beatmap
         .timing_points
         .iter()
         .filter(|point| point.uninherited)
-        .map(|point| (point.time, 60000.0 / point.beat_length, point.meter))
+        .map(|point| (point.time, 60000.0 / point.beat_length, point.meter, 4))
         .collect();
     let sv_points: Vec<(i64, f64)> = beatmap
         .timing_points

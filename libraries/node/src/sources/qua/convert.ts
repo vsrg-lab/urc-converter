@@ -34,8 +34,8 @@ export function convertQua(qua: QuaMap): Chart {
 		? 0
 		: Math.min(...qua.hitObjects.map(obj => obj.startTime));
 
-	const bpmPoints: Array<[number, number, number]> = qua.timingPoints.map(
-		point => [point.startTime, point.bpm, point.signature]
+	const bpmPoints: Array<[number, number, number, number]> = qua.timingPoints.map(
+		point => [point.startTime, point.bpm, point.signature, 4]
 	);
 
 	const timing = buildTiming(

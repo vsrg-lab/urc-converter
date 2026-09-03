@@ -87,7 +87,7 @@ def convert_bms(chart: BmsChart) -> Chart:
 	prev_y = 0.0
 	pending_stop = 0.0
 	timed = [0.0] * len(objects)
-	bpm_points: list[tuple[int, float, int]] = []
+	bpm_points: list[tuple[int, float, int, int]] = []
 	sv_points: list[tuple[int, float]] = []
 	anchors: list[int] = []
 
@@ -114,7 +114,7 @@ def convert_bms(chart: BmsChart) -> Chart:
 				timed[value] = time_us
 
 		if (new_bpm, new_beats) != (bpm, beats):
-			bpm_points.append((round_ms(time_us / 1000.0), new_bpm, new_beats))
+			bpm_points.append((round_ms(time_us / 1000.0), new_bpm, new_beats, 4))
 		if scroll is not None:
 			sv_points.append((round_ms(time_us / 1000.0), scroll))
 		bpm, beats = new_bpm, new_beats

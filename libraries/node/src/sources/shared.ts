@@ -9,6 +9,7 @@ interface RawTiming {
 	bpm: number;
 	multiplier: number;
 	beats: number;
+	noteValue: number;
 }
 
 /**
@@ -23,7 +24,7 @@ export function roundMs(value: number): number {
  * Overshooting the next point snaps to that point (the grid re-anchors there).
  */
 export function firstDownbeatAfter(
-	bpmPoints: Array<[number, number, number]>,
+	bpmPoints: Array<[number, number, number, number]>,
 	timeMs: number
 ): number | null {
 	const points = [...bpmPoints].sort((left, right) => left[0] - right[0]);
@@ -44,28 +45,31 @@ export function firstDownbeatAfter(
 }
 
 /**
- * Merges BPM and SV points into shifted `@Timing` entries. A point is forced
- * at `measureAnchorMs` even without a state change so the measure grid
- * survives the 0-clamp of the shift.
+ * Merges BPM and SV points into shifted `@Timing` entries. Each BPM point
+ * carries its meter as (beats, noteValue). A point is forced at
+ * `measureAnchorMs` even without a state change so the measure grid survives
+ * the 0-clamp of the shift.
  */
 export function buildTiming(
-	bpmPoints: Array<[number, number, number]>,
+	bpmPoints: Array<[number, number, number, number]>,
 	svPoints: Array<[number, number]>,
 	firstNoteTime: number,
 	source: string,
 	measureAnchorMs: number | null = null
 ): TimingPoint[] {
-	type Event = [number, number, boolean, number, number];
+	type Event = [number, number, boolean, number, number, number];
 	const events: Event[] = [
-		...bpmPoints.map(([time, bpm, beats], index): Event => [time, index, true, bpm, beats]),
-		...svPoints.map(([time, multiplier], index): Event => [time, index, false, multiplier, 0])
+		...bpmPoints.map(
+			([time, bpm, beats, noteValue], index): Event => [time, index, true, bpm, beats, noteValue]
+		),
+		...svPoints.map(([time, multiplier], index): Event => [time, index, false, multiplier, 0, 0])
 	];
 	events.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
 
 	let currentBpm: number | null = null;
-	let currentBeats = 4;
+	let currentMeter: [number, number] = [4, 4];
 	let currentMultiplier = 1;
-	let last: [number, number, number] | null = null;
+	let last: [number, number, [number, number]] | null = null;
 	const emitted: RawTiming[] = [];
 
 	let i = 0;
@@ -73,25 +77,32 @@ export function buildTiming(
 		const time = events[i][0];
 
 		while (i < events.length && events[i][0] === time) {
-			const [, , isBpm, value, beats] = events[i];
+			const [, , isBpm, value, beats, noteValue] = events[i];
 			if (isBpm) {
 				currentBpm = value;
-				currentBeats = beats;
+				currentMeter = [beats, noteValue];
 			} else
 				currentMultiplier = value;
 			i++;
 		}
 
-		if (currentBpm === null || (currentBpm === last?.[0] && currentMultiplier === last?.[1] && currentBeats === last?.[2]))
+		if (
+			currentBpm === null ||
+			(currentBpm === last?.[0] &&
+				currentMultiplier === last?.[1] &&
+				currentMeter[0] === last?.[2][0] &&
+				currentMeter[1] === last?.[2][1])
+		)
 			continue;
 
 		emitted.push({
 			time: roundMs(time),
 			bpm: currentBpm,
 			multiplier: currentMultiplier,
-			beats: currentBeats
+			beats: currentMeter[0],
+			noteValue: currentMeter[1]
 		});
-		last = [currentBpm, currentMultiplier, currentBeats];
+		last = [currentBpm, currentMultiplier, [currentMeter[0], currentMeter[1]]];
 	}
 
 	if (emitted.length === 0)
@@ -104,7 +115,13 @@ export function buildTiming(
 			for (const entry of emitted)
 				if (entry.time < anchor)
 					active = entry;
-			emitted.push({ time: anchor, bpm: active.bpm, multiplier: active.multiplier, beats: active.beats });
+			emitted.push({
+				time: anchor,
+				bpm: active.bpm,
+				multiplier: active.multiplier,
+				beats: active.beats,
+				noteValue: active.noteValue
+			});
 			emitted.sort((left, right) => left.time - right.time);
 		}
 	}
@@ -118,7 +135,7 @@ export function buildTiming(
 		.map(([time, entry]) => ({
 			timestampMs: time,
 			bpm: entry.bpm,
-			meter: { beats: entry.beats, noteValue: 4 },
+			meter: { beats: entry.beats, noteValue: entry.noteValue },
 			multiplier: entry.multiplier === 1 ? null : entry.multiplier
 		}));
 

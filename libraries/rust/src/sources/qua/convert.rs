@@ -42,10 +42,10 @@ pub fn convert_qua(qua: &QuaMap) -> Result<Chart> {
         .min()
         .unwrap_or(0);
 
-    let bpm_points: Vec<(i64, f64, u64)> = qua
+    let bpm_points: Vec<(i64, f64, u64, u64)> = qua
         .timing_points
         .iter()
-        .map(|point| (point.start_time, point.bpm, point.signature))
+        .map(|point| (point.start_time, point.bpm, point.signature, 4))
         .collect();
     let sv_points: Vec<(i64, f64)> = qua
         .sv_points

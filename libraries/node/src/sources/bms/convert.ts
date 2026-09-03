@@ -108,7 +108,7 @@ export function convertBms(chart: BmsChart): Chart {
 	let prevY = 0.0;
 	let pendingStop = 0.0;
 	const timed = new Array<number>(objects.length).fill(0.0);
-	const bpmPoints: Array<[number, number, number]> = [];
+	const bpmPoints: Array<[number, number, number, number]> = [];
 	const svPoints: Array<[number, number]> = [];
 	const anchors: number[] = [];
 
@@ -147,7 +147,7 @@ export function convertBms(chart: BmsChart): Chart {
 				timed[val] = timeUs;
 
 		if (newBpm !== bpm || newBeats !== beats)
-			bpmPoints.push([roundMs(timeUs / 1000.0), newBpm!, newBeats]);
+			bpmPoints.push([roundMs(timeUs / 1000.0), newBpm!, newBeats, 4]);
 		if (scroll !== null)
 			svPoints.push([roundMs(timeUs / 1000.0), scroll]);
 

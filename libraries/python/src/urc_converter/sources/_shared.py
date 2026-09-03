@@ -12,13 +12,13 @@ def round_ms(value: float) -> int:
 
 
 def first_downbeat_after(
-	bpm_points: list[tuple[int, float, int]],
+	bpm_points: list[tuple[int, float, int, int]],
 	time_ms: int,
 ) -> int | None:
 	"""First measure boundary at or after time_ms; each BPM point anchors a grid."""
 	points = sorted(bpm_points)
 
-	for index, (time, bpm, beats) in enumerate(points):
+	for index, (time, bpm, beats, _note_value) in enumerate(points):
 		next_time = points[index + 1][0] if index + 1 < len(points) else None
 		if time_ms <= time:
 			return round_ms(time)
@@ -32,7 +32,7 @@ def first_downbeat_after(
 
 
 def build_timing(
-	bpm_points: list[tuple[int, float, int]],
+	bpm_points: list[tuple[int, float, int, int]],
 	sv_points: list[tuple[int, float]],
 	first_note_time: int,
 	source: str,
@@ -40,36 +40,41 @@ def build_timing(
 ) -> list[TimingPoint]:
 	"""Merge BPM and SV points into shifted @Timing entries.
 
-	A point is forced at measure_anchor_ms even without a state change so the
-	measure grid survives the 0-clamp of the shift.
+	Each BPM point carries its meter as (beats, note_value). A point is forced
+	at measure_anchor_ms even without a state change so the measure grid
+	survives the 0-clamp of the shift.
 	"""
 	events = sorted(
-		[(time, index, True, bpm, beats) for index, (time, bpm, beats) in enumerate(bpm_points)]
+		[
+			(time, index, True, bpm, beats, note_value)
+			for index, (time, bpm, beats, note_value) in enumerate(bpm_points)
+		]
 		+ [
-			(time, index, False, multiplier, 0)
+			(time, index, False, multiplier, 0, 0)
 			for index, (time, multiplier) in enumerate(sv_points)
 		],
 		key=lambda event: (event[0], event[1]),
 	)
 
 	current_bpm: float | None = None
-	current_beats = 4
+	current_meter = (4, 4)
 	current_multiplier = 1.0
-	last: tuple[float, float, int] | None = None
-	emitted: list[tuple[int, float, float, int]] = []
+	last: tuple[float, float, tuple[int, int]] | None = None
+	emitted: list[tuple[int, float, float, int, int]] = []
 
 	for time, group in groupby(events, key=lambda event: event[0]):
-		for _, _, is_bpm, value, beats in group:
+		for _, _, is_bpm, value, beats, note_value in group:
 			if is_bpm:
-				current_bpm, current_beats = value, beats
+				current_bpm = value
+				current_meter = (beats, note_value)
 			else:
 				current_multiplier = value
 
-		if current_bpm is None or (current_bpm, current_multiplier, current_beats) == last:
+		if current_bpm is None or (current_bpm, current_multiplier, current_meter) == last:
 			continue
 
-		emitted.append((round_ms(time), current_bpm, current_multiplier, current_beats))
-		last = (current_bpm, current_multiplier, current_beats)
+		emitted.append((round_ms(time), current_bpm, current_multiplier, *current_meter))
+		last = (current_bpm, current_multiplier, current_meter)
 
 	if not emitted:
 		raise UrcError("syntax", 1, f"{source}: no BPM timing point")
@@ -84,18 +89,18 @@ def build_timing(
 			emitted.append((anchor, *active[1:]))
 			emitted.sort(key=lambda entry: entry[0])
 
-	shifted: dict[int, tuple[float, float, int]] = {}
-	for time, bpm, multiplier, beats in emitted:
-		shifted[max(time - first_note_time, 0)] = (bpm, multiplier, beats)
+	shifted: dict[int, tuple[float, float, int, int]] = {}
+	for time, bpm, multiplier, beats, note_value in emitted:
+		shifted[max(time - first_note_time, 0)] = (bpm, multiplier, beats, note_value)
 
 	points = [
 		TimingPoint(
 			timestamp_ms=time,
 			bpm=bpm,
-			meter=Meter(beats=beats, note_value=4),
+			meter=Meter(beats=beats, note_value=note_value),
 			multiplier=multiplier if multiplier != 1.0 else None,
 		)
-		for time, (bpm, multiplier, beats) in sorted(shifted.items())
+		for time, (bpm, multiplier, beats, note_value) in sorted(shifted.items())
 	]
 
 	if points[0].timestamp_ms != 0:

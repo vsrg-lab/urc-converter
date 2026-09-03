@@ -121,7 +121,7 @@ pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
     let mut prev_y = 0.0;
     let mut pending_stop = 0.0;
     let mut timed = vec![0.0; objects.len()];
-    let mut bpm_points: Vec<(i64, f64, u64)> = Vec::new();
+    let mut bpm_points: Vec<(i64, f64, u64, u64)> = Vec::new();
     let mut sv_points: Vec<(i64, f64)> = Vec::new();
     let mut anchors: Vec<i64> = Vec::new();
 
@@ -162,7 +162,7 @@ pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
         }
 
         if new_bpm != bpm || new_beats != beats {
-            bpm_points.push((round_ms(time_us / 1000.0), new_bpm.unwrap(), new_beats));
+            bpm_points.push((round_ms(time_us / 1000.0), new_bpm.unwrap(), new_beats, 4));
         }
         if let Some(s) = scroll {
             sv_points.push((round_ms(time_us / 1000.0), s));

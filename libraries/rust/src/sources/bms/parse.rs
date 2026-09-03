@@ -274,7 +274,7 @@ fn decode_bytes(data: &[u8]) -> Result<String> {
 
 fn scan_base(text: &str) -> Result<u32> {
     for line in text.lines() {
-        let parts: Vec<&str> = line.trim().split_whitespace().collect();
+        let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() == 2 && parts[0].eq_ignore_ascii_case("#BASE") {
             let base = parts[1]
                 .parse::<u32>()
@@ -322,7 +322,7 @@ fn add_message(
         return Ok(());
     }
 
-    if payload.len() % 2 != 0 || !payload.chars().all(is_id_char) {
+    if !payload.len().is_multiple_of(2) || !payload.chars().all(is_id_char) {
         return Err(UrcError::new(
             "syntax",
             line_no,

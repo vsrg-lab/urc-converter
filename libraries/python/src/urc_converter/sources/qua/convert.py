@@ -19,7 +19,7 @@ def convert_qua(qua: QuaMap) -> Chart:
 	first_note_time = min((obj.start_time for obj in qua.hit_objects), default=0)
 
 	bpm_points = [
-		(point.start_time, point.bpm, point.signature) for point in qua.timing_points
+		(point.start_time, point.bpm, point.signature, 4) for point in qua.timing_points
 	]
 	timing = build_timing(
 		bpm_points=bpm_points,

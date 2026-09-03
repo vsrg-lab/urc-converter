@@ -32,7 +32,7 @@ def convert_osu(beatmap: OsuBeatmap) -> Chart:
 	first_note_time = min((obj.time for obj in beatmap.hit_objects), default=0)
 
 	bpm_points = [
-		(point.time, 60000.0 / point.beat_length, point.meter)
+		(point.time, 60000.0 / point.beat_length, point.meter, 4)
 		for point in beatmap.timing_points
 		if point.uninherited
 	]

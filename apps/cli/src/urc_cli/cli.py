@@ -10,9 +10,11 @@ from urc_converter.sources import (
 	convert_bms,
 	convert_osu,
 	convert_qua,
+	convert_sm,
 	parse_bms,
 	parse_osu,
 	parse_qua,
+	parse_sm,
 )
 
 
@@ -55,9 +57,13 @@ def command_validate(path: Path) -> int:
 	return 0
 
 
-def command_convert(path: Path, seed: int | None, branches: list[int] | None) -> int:
+def command_convert(
+	path: Path,
+	seed: int | None,
+	branches: list[int] | None,
+	chart: int | None,
+) -> int:
 	"""Convert a source chart to URC on stdout."""
-	chart = None
 	suffix = path.suffix.lower()
 
 	try:
@@ -69,26 +75,46 @@ def command_convert(path: Path, seed: int | None, branches: list[int] | None) ->
 		):
 			print("error: --seed/--branches only apply to BMS sources", file=sys.stderr)
 			return 1
+		if chart is not None and suffix not in (".sm", ".ssc"):
+			print("error: --chart only applies to SM/SSC sources", file=sys.stderr)
+			return 1
 
+		charts = None
 		match suffix:
 			case ".osu":
-				chart = convert_osu(parse_osu(path.read_text(encoding="utf-8")))
+				charts = [convert_osu(parse_osu(path.read_text(encoding="utf-8")))]
 			case ".qua":
-				chart = convert_qua(parse_qua(path.read_text(encoding="utf-8")))
+				charts = [convert_qua(parse_qua(path.read_text(encoding="utf-8")))]
 			case ".bms" | ".bme" | ".bml" | ".pms":
-				chart = convert_bms(
-					parse_bms(
-						path.read_bytes(),
-						pms=suffix == ".pms",
-						seed=seed,
-						branches=branches,
+				charts = [
+					convert_bms(
+						parse_bms(
+							path.read_bytes(),
+							pms=suffix == ".pms",
+							seed=seed,
+							branches=branches,
+						)
 					)
-				)
+				]
+			case ".sm" | ".ssc":
+				charts = convert_sm(parse_sm(path.read_text(encoding="utf-8")))
+				if chart is not None:
+					if not 0 <= chart < len(charts):
+						print(
+							f"error: {path}: chart index {chart} out of range"
+							f" ({len(charts)} charts)",
+							file=sys.stderr,
+						)
+						return 1
+					charts = [charts[chart]]
 			case unsupported:
 				print(f"error: {path}: unsupported file type: {unsupported}", file=sys.stderr)
 				return 1
 
-		sys.stdout.buffer.write(write(chart).encode("utf-8"))
+		for index, converted in enumerate(charts):
+			if index:
+				sys.stdout.buffer.write(b"\n")
+			sys.stdout.buffer.write(write(converted).encode("utf-8"))
 	except UrcError as error:
 		print(f"error: {path}: {error}", file=sys.stderr)
 		return 1
@@ -122,11 +148,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 	convert_parser.add_argument(
 		"--branches", type=_branch_list, help="explicit #RANDOM picks, e.g. 2,1"
 	)
+	convert_parser.add_argument(
+		"--chart",
+		type=int,
+		help="chart index for SM/SSC simfiles (default: all charts)",
+	)
 	convert_parser.set_defaults(handler=command_convert)
 
 	args = parser.parse_args(argv)
 	if args.command == "convert":
-		return command_convert(args.file, args.seed, args.branches)
+		return command_convert(args.file, args.seed, args.branches, args.chart)
 
 	return args.handler(args.file)
 

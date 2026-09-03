@@ -34,12 +34,13 @@ export function convertOsu(beatmap: OsuBeatmap): Chart {
 		? 0
 		: Math.min(...beatmap.hitObjects.map(obj => obj.time));
 
-	const bpmPoints: Array<[number, number, number]> = beatmap.timingPoints
+	const bpmPoints: Array<[number, number, number, number]> = beatmap.timingPoints
 		.filter(point => point.uninherited)
 		.map(point => [
 			point.time,
 			60000 / point.beatLength,
-			point.meter
+			point.meter,
+			4
 		]);
 
 	const timing = buildTiming(
