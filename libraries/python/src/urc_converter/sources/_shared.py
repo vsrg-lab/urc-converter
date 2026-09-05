@@ -118,7 +118,7 @@ def check_hold_overlap(notes: list[Note]) -> None:
 
 	for note in sorted(notes, key=lambda item: (item.timestamp_ms, item.lane)):
 		if note.type is NoteType.LS:
-			if note.lane is open_lanes:
+			if note.lane in open_lanes:
 				raise UrcError("syntax", 1, f"overlapping holds on lane {note.lane}")
 
 			open_lanes.add(note.lane)

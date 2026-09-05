@@ -177,7 +177,7 @@ module Convert =
             PendingStop: float
             CurrentBpm: float option
             CurrentBeats: int
-            BpmPoints: (int * float * int) list
+            BpmPoints: (int * float * int * int) list
             SvPoints: (int * float) list
             Anchors: int list
             Timed: Map<int, float>
@@ -334,7 +334,7 @@ module Convert =
 
                 let bpmPoints =
                     if nextBpm <> state.CurrentBpm || nextBeats <> state.CurrentBeats then
-                        (Shared.roundMs (timeUs / 1000.0), nextBpm.Value, nextBeats) :: state.BpmPoints
+                        (Shared.roundMs (timeUs / 1000.0), nextBpm.Value, nextBeats, 4) :: state.BpmPoints
                     else
                         state.BpmPoints
 

@@ -41,7 +41,7 @@ module Convert =
                     beatmap.TimingPoints
                     |> List.choose (fun point ->
                         if point.Uninherited then
-                            Some(point.Time, 60000.0 / point.BeatLength, point.Meter)
+                            Some(point.Time, 60000.0 / point.BeatLength, point.Meter, 4)
                         else
                             None)
 

@@ -39,7 +39,7 @@ module Convert =
 
                 let bpmPoints =
                     qua.TimingPoints
-                    |> List.map (fun point -> point.StartTime, point.Bpm, point.Signature)
+                    |> List.map (fun point -> point.StartTime, point.Bpm, point.Signature, 4)
 
                 let! timing =
                     Shared.buildTiming

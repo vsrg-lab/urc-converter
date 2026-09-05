@@ -13,14 +13,14 @@ module internal Shared =
 
     /// First measure boundary at or after timeMs; each BPM point anchors a grid.
     /// Overshooting the next point snaps to that point (the grid re-anchors there).
-    let firstDownbeatAfter (bpmPoints: (int * float * int) list) (timeMs: int) : int option =
-        let points = bpmPoints |> List.sortBy (fun (time, _, _) -> time)
+    let firstDownbeatAfter (bpmPoints: (int * float * int * int) list) (timeMs: int) : int option =
+        let points = bpmPoints |> List.sortBy (fun (time, _, _, _) -> time)
 
         let rec loop rest =
             match rest with
             | [] -> None
-            | (time, bpm, beats) :: tail ->
-                let nextTime = match tail with (next, _, _) :: _ -> Some next | [] -> None
+            | (time, bpm, beats, _) :: tail ->
+                let nextTime = match tail with (next, _, _, _) :: _ -> Some next | [] -> None
 
                 if timeMs <= time then Some(roundMs (float time))
                 else
@@ -41,7 +41,7 @@ module internal Shared =
         List.sequenceResultM results
 
     type private TimingEvent =
-        | BpmPoint of time: int * index: int * bpm: float * beats: int
+        | BpmPoint of time: int * index: int * bpm: float * beats: int * noteValue: int
         | SvPoint of time: int * index: int * multiplier: float
 
     type private EmittedTimingPoint =
@@ -50,19 +50,21 @@ module internal Shared =
             Bpm: float
             Multiplier: float
             Beats: int
+            NoteValue: int
         }
 
     type private ScanState =
         {
             Bpm: float option
             Beats: int
+            NoteValue: int
             Multiplier: float
-            Last: (float * float * int) option
+            Last: (float * float * int * int) option
             Emitted: EmittedTimingPoint list
         }
 
     let buildTiming
-        (bpmPoints: (int * float * int) list)
+        (bpmPoints: (int * float * int * int) list)
         (svPoints: (int * float) list)
         (firstNoteTime: int)
         (source: string)
@@ -71,18 +73,19 @@ module internal Shared =
         let events =
             (bpmPoints
              |> List.indexed
-             |> List.map (fun (index, (time, bpm, beats)) -> BpmPoint(time, index, bpm, beats)))
+             |> List.map (fun (index, (time, bpm, beats, noteValue)) -> BpmPoint(time, index, bpm, beats, noteValue)))
             @ (svPoints
                |> List.indexed
                |> List.map (fun (index, (time, multiplier)) -> SvPoint(time, index, multiplier)))
             |> List.sortBy (function
-                | BpmPoint(time, index, _, _)
+                | BpmPoint(time, index, _, _, _)
                 | SvPoint(time, index, _) -> time, index)
 
         let initial =
             {
                 Bpm = None
                 Beats = 4
+                NoteValue = 4
                 Multiplier = 1.0
                 Last = None
                 Emitted = []
@@ -91,30 +94,38 @@ module internal Shared =
         let groupedEvents =
             events
             |> List.groupBy (function
-                | BpmPoint(time, _, _, _)
+                | BpmPoint(time, _, _, _, _)
                 | SvPoint(time, _, _) -> time)
         let folder (state: ScanState) (time, evts) =
-            let nextBpm, nextBeats, nextMult =
+            let nextBpm, nextBeats, nextNoteValue, nextMult =
                 evts
                 |> List.fold
-                    (fun (bpm, beats, mult) -> function
-                        | BpmPoint(_, _, b, bt) -> Some b, bt, mult
-                        | SvPoint(_, _, m) -> bpm, beats, m)
-                    (state.Bpm, state.Beats, state.Multiplier)
+                    (fun (bpm, beats, noteValue, mult) -> function
+                        | BpmPoint(_, _, b, bt, nv) -> Some b, bt, nv, mult
+                        | SvPoint(_, _, m) -> bpm, beats, noteValue, m)
+                    (state.Bpm, state.Beats, state.NoteValue, state.Multiplier)
 
-            let nextState = { state with Bpm = nextBpm; Beats = nextBeats; Multiplier = nextMult }
+            let nextState =
+                { state with
+                    Bpm = nextBpm
+                    Beats = nextBeats
+                    NoteValue = nextNoteValue
+                    Multiplier = nextMult
+                }
+
             match nextBpm with
             | None -> nextState
-            | Some bpm when state.Last = Some(bpm, nextMult, nextBeats) -> nextState
+            | Some bpm when state.Last = Some(bpm, nextMult, nextBeats, nextNoteValue) -> nextState
             | Some bpm ->
                 { nextState with
-                    Last = Some(bpm, nextMult, nextBeats)
+                    Last = Some(bpm, nextMult, nextBeats, nextNoteValue)
                     Emitted =
                         {
                             Time = time
                             Bpm = bpm
                             Multiplier = nextMult
                             Beats = nextBeats
+                            NoteValue = nextNoteValue
                         }
                         :: state.Emitted
                 }
@@ -134,22 +145,24 @@ module internal Shared =
                         |> Option.defaultValue (List.head emitted)
 
                     let before, after = List.partition (fun point -> point.Time < anchor) emitted
-                    before @ { Time = anchor; Bpm = active.Bpm; Multiplier = active.Multiplier; Beats = active.Beats } :: after
+                    before
+                    @ { active with Time = anchor }
+                      :: after
                 | _ -> emitted
 
             let shifted =
                 emitted
                 |> List.map (fun point ->
-                    max (point.Time - firstNoteTime) 0, (point.Bpm, point.Multiplier, point.Beats))
+                    max (point.Time - firstNoteTime) 0, (point.Bpm, point.Multiplier, point.Beats, point.NoteValue))
                 |> Map.ofList
 
             let points =
                 [
-                    for time, (bpm, multiplier, beats) in Map.toList shifted ->
+                    for time, (bpm, multiplier, beats, noteValue) in Map.toList shifted ->
                         {
                             TimestampMs = time
                             Bpm = bpm
-                            Meter = { Beats = beats; NoteValue = 4 }
+                            Meter = { Beats = beats; NoteValue = noteValue }
                             Multiplier = if multiplier = 1.0 then None else Some multiplier
                         }
                 ]

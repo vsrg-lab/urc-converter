@@ -27,6 +27,9 @@
 		<Compile Include="Sources\Qua\Model.fs" />
 		<Compile Include="Sources\Qua\Parse.fs" />
 		<Compile Include="Sources\Qua\Convert.fs" />
+		<Compile Include="Sources\Sm\Model.fs" />
+		<Compile Include="Sources\Sm\Parse.fs" />
+		<Compile Include="Sources\Sm\Convert.fs" />
 		<Compile Include="Writer.fs" />
 	</ItemGroup>
 
