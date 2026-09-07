@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<TargetFramework>net10.0</TargetFramework>
@@ -28,6 +28,7 @@
 		<Compile Include="Sources\Qua\Parse.fs" />
 		<Compile Include="Sources\Qua\Convert.fs" />
 		<Compile Include="Sources\Sm\Model.fs" />
+		<Compile Include="Sources\Sm\Preprocess.fs" />
 		<Compile Include="Sources\Sm\Parse.fs" />
 		<Compile Include="Sources\Sm\Convert.fs" />
 		<Compile Include="Writer.fs" />

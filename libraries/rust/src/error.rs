@@ -1,7 +1,7 @@
 //! Structured errors returned while parsing URC documents.
 
 /// Crate-wide result type for parsing operations.
-pub type Result<T> = std::result::Result<T, UrcError>;
+pub type Result<T> = core::result::Result<T, UrcError>;
 
 /// Parser failure with a machine-readable category and source line.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

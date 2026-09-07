@@ -3,6 +3,7 @@
 mod convert;
 mod model;
 mod parse;
+mod preprocess;
 
 pub use convert::convert_sm;
 pub use model::{NoteKind, SmChart, SmFile, SmNote, Timing};
