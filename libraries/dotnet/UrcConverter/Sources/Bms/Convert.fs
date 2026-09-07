@@ -104,8 +104,8 @@ module Convert =
 
         let finalStart, finalNotes = stream |> List.fold folder (None, [])
         match finalStart with
-        | Some _ -> Result.Error(UrcError.Syntax(1, $"long note on lane {lane} has no end"))
-        | None -> Result.Ok(List.rev finalNotes)
+        | Some _ -> Error(UrcError.Syntax(1, $"long note on lane {lane} has no end"))
+        | None -> Ok(List.rev finalNotes)
 
     let private buildNotes
         (chart: BmsChart)
@@ -125,7 +125,7 @@ module Convert =
             | Some lane, Some "mine" ->
                 stream
                 |> List.map (fun (time, _) -> (Shared.roundMs (time / 1000.0), lane, NoteType.M))
-                |> Result.Ok
+                |> Ok
             | Some lane, Some "ln" ->
                 pairLongNotes chart stream lane
             | Some lane, Some _ ->
@@ -147,8 +147,8 @@ module Convert =
                     match lastPending with
                     | Some p -> (Shared.roundMs (p / 1000.0), lane, NoteType.N) :: foldedNotes
                     | None -> foldedNotes
-                Result.Ok (List.rev finalNotes)
-            | _ -> Result.Ok []
+                Ok (List.rev finalNotes)
+            | _ -> Ok []
 
         streams
         |> List.traverseResultM channelNotes
@@ -187,8 +187,8 @@ module Convert =
         result {
             let! bpmInitial =
                 match chart.Bpm with
-                | Some bpm when bpm > 0.0 -> Result.Ok bpm
-                | _ -> Result.Error(UrcError.Syntax(1, "missing or non-positive #BPM"))
+                | Some bpm when bpm > 0.0 -> Ok bpm
+                | _ -> Error(UrcError.Syntax(1, "missing or non-positive #BPM"))
 
             let maxMeasure =
                 chart.Measures
@@ -210,7 +210,7 @@ module Convert =
 
             let rec scanMeasures (acc: ScanAcc) (m: int) : Result<ScanAcc, UrcError> =
                 if m > maxMeasure then
-                    Result.Ok { acc with Objects = List.rev acc.Objects }
+                    Ok { acc with Objects = List.rev acc.Objects }
                 else
                     let rate = Map.tryFind m chart.Rates |> Option.defaultValue 1.0
                     let prevRate = Map.tryFind (m - 1) chart.Rates |> Option.defaultValue 1.0
@@ -229,11 +229,11 @@ module Convert =
                     | Some measureMap ->
                         let rec scanChannels (cAcc: ScanAcc) (channels: (string * string list) list) : Result<ScanAcc, UrcError> =
                             match channels with
-                            | [] -> Result.Ok cAcc
+                            | [] -> Ok cAcc
                             | (channel, ids) :: restChannels ->
                                 let rec scanIds (iAcc: ScanAcc) (idx: int) : Result<ScanAcc, UrcError> =
                                     if idx >= ids.Length then
-                                        Result.Ok iAcc
+                                        Ok iAcc
                                     else
                                         let obj = ids[idx]
                                         let y = boundaries[m] + (float idx / float ids.Length) * rate
@@ -247,15 +247,15 @@ module Convert =
                                                 | "08" ->
                                                     match Map.tryFind obj chart.BpmDefs with
                                                     | Some bpmVal -> scanIds { iAcc with Entries = (y, 0, EntryKind.Bpm bpmVal) :: iAcc.Entries } (idx + 1)
-                                                    | None -> Result.Error(UrcError.Syntax(1, $"undefined #BPM{obj}"))
+                                                    | None -> Error(UrcError.Syntax(1, $"undefined #BPM{obj}"))
                                                 | "09" ->
                                                     match Map.tryFind obj chart.StopDefs with
                                                     | Some stopVal -> scanIds { iAcc with Entries = (y, 1, EntryKind.Stop stopVal) :: iAcc.Entries } (idx + 1)
-                                                    | None -> Result.Error(UrcError.Syntax(1, $"undefined #STOP{obj}"))
+                                                    | None -> Error(UrcError.Syntax(1, $"undefined #STOP{obj}"))
                                                 | _ ->
                                                     match Map.tryFind obj chart.ScrollDefs with
                                                     | Some scrollVal -> scanIds { iAcc with Entries = (y, 2, EntryKind.Scroll scrollVal) :: iAcc.Entries } (idx + 1)
-                                                    | None -> Result.Error(UrcError.Syntax(1, $"undefined #SCROLL{obj}"))
+                                                    | None -> Error(UrcError.Syntax(1, $"undefined #SCROLL{obj}"))
                                             else
                                                 scanIds iAcc (idx + 1)
                                         else
@@ -273,13 +273,11 @@ module Convert =
                                                 else
                                                     scanIds { iAcc with Used = used } (idx + 1)
 
-                                match scanIds cAcc 0 with
-                                | Result.Ok nextAcc -> scanChannels nextAcc restChannels
-                                | Result.Error err -> Result.Error err
+                                scanIds cAcc 0
+                                |> Result.bind (fun nextAcc -> scanChannels nextAcc restChannels)
 
-                        match scanChannels accWithMeter (Map.toList measureMap) with
-                        | Result.Ok nextAcc -> scanMeasures nextAcc (m + 1)
-                        | Result.Error err -> Result.Error err
+                        scanChannels accWithMeter (Map.toList measureMap)
+                        |> Result.bind (fun nextAcc -> scanMeasures nextAcc (m + 1))
 
             let! scanned = scanMeasures initialAcc 0
             let mode = detectMode chart.Pms scanned.Used
@@ -323,7 +321,10 @@ module Convert =
                         | EntryKind.Bpm v -> foldGroupEvents (Some v) nextBeats pendingStop scroll anchors timed rest
                         | EntryKind.Meter v -> foldGroupEvents nextBpm v pendingStop scroll anchors timed rest
                         | EntryKind.Stop v ->
-                            let stopTime = MeasureUs * v / nextBpm.Value
+                            let stopTime =
+                                match nextBpm with
+                                | Some b -> MeasureUs * v / b
+                                | None -> 0.0
                             foldGroupEvents nextBpm nextBeats stopTime scroll anchors timed rest
                         | EntryKind.Scroll v -> foldGroupEvents nextBpm nextBeats pendingStop (Some v) anchors timed rest
                         | EntryKind.Object idx -> foldGroupEvents nextBpm nextBeats pendingStop scroll anchors (Map.add idx timeUs timed) rest
@@ -333,9 +334,10 @@ module Convert =
                     foldGroupEvents state.CurrentBpm state.CurrentBeats 0.0 None state.Anchors state.Timed group
 
                 let bpmPoints =
-                    if nextBpm <> state.CurrentBpm || nextBeats <> state.CurrentBeats then
-                        (Shared.roundMs (timeUs / 1000.0), nextBpm.Value, nextBeats, 4) :: state.BpmPoints
-                    else
+                    match nextBpm with
+                    | Some bpm when nextBpm <> state.CurrentBpm || nextBeats <> state.CurrentBeats ->
+                        (Shared.roundMs (timeUs / 1000.0), bpm, nextBeats, 4) :: state.BpmPoints
+                    | _ ->
                         state.BpmPoints
 
                 let svPoints =

@@ -14,23 +14,23 @@ module Convert =
         result {
             if beatmap.Mode <> 3 then
                 return!
-                    Result.Error(
+                    Error(
                         UrcError.UnsupportedVersion(1, $"unsupported game mode: {beatmap.Mode}")
                     )
 
             match beatmap.CircleSize with
-            | None -> return! Result.Error(UrcError.Syntax(1, "missing CircleSize"))
+            | None -> return! Error(UrcError.Syntax(1, "missing CircleSize"))
             | Some circleSize when circleSize <> truncate circleSize ->
                 return!
-                    Result.Error(UrcError.Syntax(1, $"CircleSize must be an integer: {circleSize}"))
+                    Error(UrcError.Syntax(1, $"CircleSize must be an integer: {circleSize}"))
             | Some circleSize ->
                 let keys = int circleSize
 
                 if keys < keyMin || keys > keyMax then
-                    return! Result.Error(UrcError.Syntax(1, $"CircleSize out of range: {keys}"))
+                    return! Error(UrcError.Syntax(1, $"CircleSize out of range: {keys}"))
 
                 if beatmap.TimingPoints |> List.exists (fun point -> point.BeatLength = 0.0) then
-                    return! Result.Error(UrcError.Syntax(1, "timing point with zero beat length"))
+                    return! Error(UrcError.Syntax(1, "timing point with zero beat length"))
 
                 let firstNoteTime =
                     match beatmap.HitObjects with
@@ -65,14 +65,14 @@ module Convert =
 
                         match obj.IsHold, obj.EndTime with
                         | true, Some endTime when endTime < obj.Time ->
-                            Result.Error(
+                            Error(
                                 UrcError.Syntax(
                                     1,
                                     $"hold ends before it starts: {endTime} < {obj.Time}"
                                 )
                             )
                         | true, Some endTime ->
-                            Result.Ok
+                            Ok
                                 [
                                     {
                                         TimestampMs = obj.Time - firstNoteTime
@@ -87,7 +87,7 @@ module Convert =
                                 ]
                         | true, None -> invalidOp "hold hit object must have an end time"
                         | false, _ ->
-                            Result.Ok
+                            Ok
                                 [
                                     {
                                         TimestampMs = obj.Time - firstNoteTime
@@ -135,7 +135,7 @@ module Convert =
                 let missingText = missing |> String.concat ", "
 
                 if not (List.isEmpty missing) then
-                    return! Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
+                    return! Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
 
                 match title, artist, beatmap.Creator, beatmap.Version with
                 | Some title, Some artist, Some creator, Some version ->
@@ -162,5 +162,5 @@ module Convert =
                         }
                 | _ ->
                     return!
-                        Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
+                        Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
         }

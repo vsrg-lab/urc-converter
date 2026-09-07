@@ -35,10 +35,10 @@ module Parse =
         match tryFind mapping key with
         | Some(Scalar text) ->
             match Double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture) with
-            | true, value -> Result.Ok value
-            | false, _ -> Result.Error(UrcError.Syntax(1, $"invalid {key}: '{text}'"))
-        | Some _ -> Result.Error(UrcError.Syntax(1, $"invalid {key}"))
-        | None -> Result.Error(UrcError.Syntax(1, $"missing {key}"))
+            | true, value -> Ok value
+            | false, _ -> Error(UrcError.Syntax(1, $"invalid {key}: '{text}'"))
+        | Some _ -> Error(UrcError.Syntax(1, $"invalid {key}"))
+        | None -> Error(UrcError.Syntax(1, $"missing {key}"))
 
     let private numberOr
         (mapping: YamlMappingNode)
@@ -46,7 +46,7 @@ module Parse =
         (fallback: float)
         : Result<float, UrcError> =
         match tryFind mapping key with
-        | None -> Result.Ok fallback
+        | None -> Ok fallback
         | Some _ -> number mapping key
 
     let private entries
@@ -54,13 +54,13 @@ module Parse =
         (key: string)
         : Result<YamlMappingNode list, UrcError> =
         match tryFind mapping key with
-        | None -> Result.Ok []
+        | None -> Ok []
         | Some(Sequence children) ->
             children
             |> List.traverseResultM (function
-                | Mapping entry -> Result.Ok entry
-                | _ -> Result.Error(UrcError.Syntax(1, $"{key} must be a list of mappings")))
-        | Some _ -> Result.Error(UrcError.Syntax(1, $"{key} must be a list of mappings"))
+                | Mapping entry -> Ok entry
+                | _ -> Error(UrcError.Syntax(1, $"{key} must be a list of mappings")))
+        | Some _ -> Error(UrcError.Syntax(1, $"{key} must be a list of mappings"))
 
     let private scalarText (mapping: YamlMappingNode) (key: string) : string option =
         match tryFind mapping key with
@@ -74,18 +74,17 @@ module Parse =
             try
                 use reader = new StringReader(text)
                 stream.Load(reader)
-                Result.Ok()
+                Ok()
             with error ->
                 let line =
                     match error with
                     | :? YamlDotNet.Core.YamlException as yaml -> int yaml.Start.Line
                     | _ -> 1
 
-                Result.Error(UrcError.Syntax(line, $"invalid YAML: {error.Message}"))
+                Error(UrcError.Syntax(line, $"invalid YAML: {error.Message}"))
 
-        match loaded with
-        | Result.Error error -> Result.Error error
-        | Result.Ok() ->
+        loaded
+        |> Result.bind (fun () ->
             match stream.Documents |> Seq.toList with
             | doc :: _ ->
                 match doc.RootNode with
@@ -115,7 +114,7 @@ module Parse =
 
                                         if signature <> 3 && signature <> 4 then
                                             return!
-                                                Result.Error(
+                                                Error(
                                                     UrcError.Syntax(
                                                         1,
                                                         $"unsupported time signature: {signature}"
@@ -186,5 +185,5 @@ module Parse =
                                 HitObjects = hitObjects
                             }
                     }
-                | _ -> Result.Error(UrcError.Syntax(1, ".qua must be a YAML mapping"))
-            | [] -> Result.Error(UrcError.Syntax(1, ".qua has no YAML document"))
+                | _ -> Error(UrcError.Syntax(1, ".qua must be a YAML mapping"))
+            | [] -> Error(UrcError.Syntax(1, ".qua has no YAML document")))

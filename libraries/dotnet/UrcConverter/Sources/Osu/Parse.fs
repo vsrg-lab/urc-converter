@@ -26,7 +26,7 @@ module Parse =
                     | Some digits ->
                         invariant $"{String(Array.ofList whole)}.{String(Array.ofList digits)}"
 
-                if sign.IsSome then -magnitude else magnitude)
+                if Option.isSome sign then -magnitude else magnitude)
 
     let private pNumberW: Parser<float, State> =
         many (pchar ' ') >>. pNumber .>> many (pchar ' ')
@@ -39,13 +39,13 @@ module Parse =
         (value: string)
         (update: Beatmap -> float -> Beatmap)
         : Parser<unit, State> =
-        match runParserOnString (pNumber .>> eof) Unchecked.defaultof<State> "" value with
-        | Success(number, _, _) ->
+        match Double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture) with
+        | true, number ->
             updateUserState (fun state ->
                 { state with
                     Beatmap = update state.Beatmap number
                 })
-        | Failure _ -> fail $"invalid {label}: '{value}'"
+        | false, _ -> fail $"invalid {label}: '{value}'"
 
     let private pKeyValue: Parser<string * string, State> =
         pipe2
@@ -235,5 +235,5 @@ module Parse =
         | Success(beatmap, _, _) -> Result.Ok beatmap
         | Failure(_, parseError, _) ->
             Result.Error(
-                UrcError.Syntax(int parseError.Position.Line + 1, $"invalid .osu: {parseError}")
+                UrcError.Syntax(int parseError.Position.Line, $"invalid .osu: {parseError}")
             )

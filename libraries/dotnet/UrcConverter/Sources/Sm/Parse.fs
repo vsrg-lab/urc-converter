@@ -3,6 +3,7 @@ namespace UrcConverter.Sources.Sm
 module Parse =
 
     open System.Globalization
+    open FsToolkit.ErrorHandling
     open UrcConverter
     open UrcConverter.Sources.Sm.Model
 
@@ -219,13 +220,13 @@ module Parse =
                                     Error(UrcError.syntax 1 $"overlapping hold head at row {row}")
                                 else
                                     addNote (if char = '2' then Hold else Roll)
-                                    processChars (track + 1) (skipKeysound position) (holds.Add(track, notes.Count - 1))
+                                    processChars (track + 1) (skipKeysound position) (Map.add track (notes.Count - 1) holds)
                             | '3' ->
                                 match holds |> Map.tryFind track with
                                 | Some noteIndex ->
                                     let head = notes[noteIndex]
                                     notes[noteIndex] <- { head with TailRow = Some row }
-                                    processChars (track + 1) (skipKeysound position) (holds.Remove track)
+                                    processChars (track + 1) (skipKeysound position) (Map.remove track holds)
                                 | None -> Error(UrcError.syntax 1 $"hold tail without a head at row {row}")
                             | 'M' ->
                                 addNote Mine
@@ -256,7 +257,7 @@ module Parse =
 
         loopMeasures 0 (List.ofArray (data.Split(','))) Map.empty
         |> Result.bind (fun openHolds ->
-            if not openHolds.IsEmpty then
+            if not (Map.isEmpty openHolds) then
                 Error(UrcError.syntax 1 "hold note without a tail")
             else
                 Ok(List.ofSeq notes))
@@ -354,7 +355,7 @@ module Parse =
                     resolveLanes openChart.StepsType
                     |> Result.bind (fun lanes -> parseNoteData value lanes)
                     |> Result.map (fun notes ->
-                        let charts = simfile.Charts @ [ { openChart with Notes = notes } ]
+                        let charts = { openChart with Notes = notes } :: simfile.Charts
                         ({ simfile with Charts = charts }, None))
                 | None when params_.Length >= 7 ->
                     let block =
@@ -368,7 +369,7 @@ module Parse =
                     resolveLanes block.StepsType
                     |> Result.bind (fun lanes -> parseNoteData params_[6] lanes)
                     |> Result.map (fun notes ->
-                        { simfile with Charts = simfile.Charts @ [ { block with Notes = notes } ] }, None)
+                        { simfile with Charts = { block with Notes = notes } :: simfile.Charts }, None)
                 | None -> Ok(simfile, chart)
             else
                 match chart with
@@ -400,12 +401,19 @@ module Parse =
                         else
                             Ok(simfile, Some openChart)
 
-        (Ok(SmFile.Empty, None), tokenize text)
-        ||> List.fold (fun state params_ ->
-            state
-            |> Result.bind (fun current -> applyTag current params_))
-        |> Result.bind (fun (simfile, _) ->
-            if simfile.Charts.IsEmpty then
-                Error(UrcError.syntax 1 "no chart in simfile")
-            else
-                Ok simfile)
+        let rec loop state =
+            function
+            | [] ->
+                let simfile, _ = state
+
+                if List.isEmpty simfile.Charts then
+                    Error(UrcError.syntax 1 "no chart in simfile")
+                else
+                    Ok { simfile with Charts = List.rev simfile.Charts }
+            | params_ :: rest ->
+                match applyTag state params_ with
+                | Ok next -> loop next rest
+                | Error err -> Error err
+
+        loop (SmFile.Empty, None) (tokenize text)
+

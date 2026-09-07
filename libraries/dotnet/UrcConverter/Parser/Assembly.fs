@@ -81,40 +81,38 @@ module internal Assembly =
             let ordered =
                 state.Notes |> List.rev |> List.sortBy (fun raw -> raw.Timestamp, raw.Lane)
 
-            match validateNotes totalLanes Map.empty [] ordered with
-            | Error error -> Error error
-            | Ok revNotes ->
-                    let judgment =
-                        match state.Windows, state.Rates with
-                        | None, _ -> None
-                        | Some windows, Some rates -> Some { Windows = windows; Rates = rates }
-                        | Some _, None ->
-                            invalidOp "Judgment Rate must exist after rule 4 validation"
+            validateNotes totalLanes Map.empty [] ordered
+            |> Result.map (fun revNotes ->
+                let judgment =
+                    match state.Windows, state.Rates with
+                    | None, _ -> None
+                    | Some windows, Some rates -> Some { Windows = windows; Rates = rates }
+                    | Some _, None ->
+                        invalidOp "Judgment Rate must exist after rule 4 validation"
 
-                    let metadataValue name =
-                        match List.tryFind (fun (key, _) -> key = name) state.Metadata with
-                        | Some(_, value) -> value
-                        | None ->
-                            invalidOp $"Metadata field '{name}' must exist after rule 4 validation"
+                let metadataValue name =
+                    match List.tryFind (fun (key, _) -> key = name) state.Metadata with
+                    | Some(_, value) -> value
+                    | None ->
+                        invalidOp $"Metadata field '{name}' must exist after rule 4 validation"
 
-                    Ok
+                {
+                    FormatVersion = state.Version
+                    Metadata =
                         {
-                            FormatVersion = state.Version
-                            Metadata =
-                                {
-                                    Original = metadataValue "Original"
-                                    Title = metadataValue "Title"
-                                    Artist = metadataValue "Artist"
-                                    Creator = metadataValue "Creator"
-                                    Version = metadataValue "Version"
-                                }
-                            Judgment = judgment
-                            Layout =
-                                {
-                                    Keys = keys
-                                    SpecialKeys = specialKeys
-                                    SpecialLanes = state.Special
-                                }
-                            TimingPoints = List.rev state.TimingPoints
-                            Notes = List.rev revNotes
+                            Original = metadataValue "Original"
+                            Title = metadataValue "Title"
+                            Artist = metadataValue "Artist"
+                            Creator = metadataValue "Creator"
+                            Version = metadataValue "Version"
                         }
+                    Judgment = judgment
+                    Layout =
+                        {
+                            Keys = keys
+                            SpecialKeys = specialKeys
+                            SpecialLanes = state.Special
+                        }
+                    TimingPoints = List.rev state.TimingPoints
+                    Notes = List.rev revNotes
+                })

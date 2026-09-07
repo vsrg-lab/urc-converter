@@ -8,28 +8,28 @@ module Convert =
     open UrcConverter.Sources.Qua.Model
 
     let private modeKeys =
-        [
-            (1, 4)
-            (2, 7)
-            (3, 1)
-            (4, 2)
-            (5, 3)
-            (6, 5)
-            (7, 6)
-            (8, 8)
-            (9, 9)
-            (10, 10)
-        ]
+        function
+        | 1 -> Some 4
+        | 2 -> Some 7
+        | 3 -> Some 1
+        | 4 -> Some 2
+        | 5 -> Some 3
+        | 6 -> Some 5
+        | 7 -> Some 6
+        | 8 -> Some 8
+        | 9 -> Some 9
+        | 10 -> Some 10
+        | _ -> None
 
     let convert (qua: QuaMap) : Result<Chart, UrcError> =
         result {
-            match modeKeys |> List.tryFind (fun (mode, _) -> mode = qua.Mode) with
+            match modeKeys qua.Mode with
             | None ->
                 return!
-                    Result.Error(
+                    Error(
                         UrcError.UnsupportedVersion(1, $"unsupported Quaver mode: {qua.Mode}")
                     )
-            | Some(_, keys) ->
+            | Some keys ->
                 let specialKeys = if qua.HasScratchKey then 1 else 0
 
                 let firstNoteTime =
@@ -57,16 +57,16 @@ module Convert =
                         let lane = obj.Lane - 1
 
                         if lane < 0 || lane >= total then
-                            Result.Error(UrcError.Syntax(1, $"lane out of range: {obj.Lane}"))
+                            Error(UrcError.Syntax(1, $"lane out of range: {obj.Lane}"))
                         elif obj.EndTime <> 0 && obj.EndTime < obj.StartTime then
-                            Result.Error(
+                            Error(
                                 UrcError.Syntax(
                                     1,
                                     $"hold ends before it starts: {obj.EndTime} < {obj.StartTime}"
                                 )
                             )
                         elif obj.EndTime <> 0 then
-                            Result.Ok
+                            Ok
                                 [
                                     {
                                         TimestampMs = obj.StartTime - firstNoteTime
@@ -80,7 +80,7 @@ module Convert =
                                     }
                                 ]
                         elif obj.Mine then
-                            Result.Ok
+                            Ok
                                 [
                                     {
                                         TimestampMs = obj.StartTime - firstNoteTime
@@ -89,7 +89,7 @@ module Convert =
                                     }
                                 ]
                         else
-                            Result.Ok
+                            Ok
                                 [
                                     {
                                         TimestampMs = obj.StartTime - firstNoteTime
@@ -119,7 +119,7 @@ module Convert =
                 let missingText = missing |> String.concat ", "
 
                 if not (List.isEmpty missing) then
-                    return! Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
+                    return! Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
 
                 match qua.Title, qua.Artist, qua.Creator, qua.DifficultyName with
                 | Some title, Some artist, Some creator, Some version ->
@@ -144,5 +144,5 @@ module Convert =
                             TimingPoints = timing
                             Notes = notes
                         }
-                | _ -> return! Result.Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
+                | _ -> return! Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
         }

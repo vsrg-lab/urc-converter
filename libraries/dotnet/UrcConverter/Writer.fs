@@ -67,9 +67,7 @@ module Writer =
                         floatText point.Bpm
                         $"{point.Meter.Beats}/{point.Meter.NoteValue}"
                     ]
-                    @ (match point.Multiplier with
-                       | Some multiplier -> [ floatText multiplier ]
-                       | None -> [])
+                    @ (point.Multiplier |> Option.toList |> List.map floatText)
 
                 fields |> String.concat ", ")
 
@@ -86,8 +84,7 @@ module Writer =
             Strings.sectionTiming :: timingLines
             Strings.sectionNotes :: noteLines
         ]
-        |> List.choose (function
-            | [] -> None
-            | lines -> Some(String.concat "\n" lines))
+        |> List.filter (not << List.isEmpty)
+        |> List.map (String.concat "\n")
         |> String.concat "\n\n"
-        |> fun text -> text + "\n"
+        |> sprintf "%s\n"

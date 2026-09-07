@@ -456,8 +456,8 @@ module Convert =
                                     { state with Warping = true; WarpDest = dest }
                             | DelayEvent seconds -> { state with Seconds = state.Seconds + seconds }
                             | NoteEvent index ->
-                                { state with HeadTimes = state.HeadTimes.Add(index, state.Seconds) }
-                            | TailEvent index -> { state with TailTimes = state.TailTimes.Add(index, state.Seconds) }
+                                { state with HeadTimes = Map.add index state.Seconds state.HeadTimes }
+                            | TailEvent index -> { state with TailTimes = Map.add index state.Seconds state.TailTimes }
                             | AnchorEvent ->
                                 { state with Anchors = Shared.roundMs (state.Seconds * 1000.0) :: state.Anchors }
                             | StopEvent seconds -> { state with Seconds = state.Seconds + seconds }
@@ -508,8 +508,8 @@ module Convert =
 
             let! timingPoints =
                 Shared.buildTiming
-                    walked.BpmPoints
-                    walked.SvPoints
+                    (List.rev walked.BpmPoints)
+                    (List.rev walked.SvPoints)
                     firstNoteTime
                     ".sm"
                     (anchors |> List.tryFind (fun time -> time >= firstNoteTime))

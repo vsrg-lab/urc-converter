@@ -132,7 +132,7 @@ module internal Shared =
         let scanState = List.fold folder initial groupedEvents
 
         match List.rev scanState.Emitted with
-        | [] -> Result.Error(UrcError.Syntax(1, $"{source}: no BPM timing point"))
+        | [] -> Error(UrcError.Syntax(1, $"{source}: no BPM timing point"))
         | emitted ->
             // A point is forced at the anchor even without a state change so
             // the measure grid survives the 0-clamp of the shift.
@@ -169,7 +169,7 @@ module internal Shared =
 
             match points with
             | first :: _ when first.TimestampMs <> 0 ->
-                Result.Ok(
+                Ok(
                     {
                         TimestampMs = 0
                         Bpm = first.Bpm
@@ -178,18 +178,20 @@ module internal Shared =
                     }
                     :: points
                 )
-            | _ -> Result.Ok points
+            | _ -> Ok points
 
     let checkHoldOverlap (notes: Note list) : Result<unit, UrcError> =
-        let folder (openLanes: Set<int>) (note: Note) =
-            match note.Type with
-            | NoteType.LS when Set.contains note.Lane openLanes ->
-                Result.Error(UrcError.Syntax(1, $"overlapping holds on lane {note.Lane}"))
-            | NoteType.LS -> Result.Ok(Set.add note.Lane openLanes)
-            | NoteType.LE -> Result.Ok(Set.remove note.Lane openLanes)
-            | _ -> Result.Ok openLanes
+        let rec loop (openLanes: Set<int>) (rest: Note list) =
+            match rest with
+            | [] -> Ok ()
+            | note :: tail ->
+                match note.Type with
+                | NoteType.LS when Set.contains note.Lane openLanes ->
+                    Error(UrcError.Syntax(1, $"overlapping holds on lane {note.Lane}"))
+                | NoteType.LS -> loop (Set.add note.Lane openLanes) tail
+                | NoteType.LE -> loop (Set.remove note.Lane openLanes) tail
+                | _ -> loop openLanes tail
 
         notes
         |> List.sortBy (fun note -> note.TimestampMs, note.Lane)
-        |> List.fold (fun res note -> res |> Result.bind (fun lanes -> folder lanes note)) (Ok Set.empty)
-        |> Result.map ignore
+        |> loop Set.empty
