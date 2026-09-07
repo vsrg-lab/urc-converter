@@ -31,6 +31,9 @@
 		<Compile Include="Sources\Sm\Preprocess.fs" />
 		<Compile Include="Sources\Sm\Parse.fs" />
 		<Compile Include="Sources\Sm\Convert.fs" />
+		<Compile Include="Sources\Ojn\Model.fs" />
+		<Compile Include="Sources\Ojn\Parse.fs" />
+		<Compile Include="Sources\Ojn\Convert.fs" />
 		<Compile Include="Writer.fs" />
 	</ItemGroup>
 

@@ -8,10 +8,12 @@ from pathlib import Path
 from urc_converter import NoteType, UrcError, parse, write
 from urc_converter.sources import (
 	convert_bms,
+	convert_ojn,
 	convert_osu,
 	convert_qua,
 	convert_sm,
 	parse_bms,
+	parse_ojn,
 	parse_osu,
 	parse_qua,
 	parse_sm,
@@ -75,8 +77,8 @@ def command_convert(
 		):
 			print("error: --seed/--branches only apply to BMS sources", file=sys.stderr)
 			return 1
-		if chart is not None and suffix not in (".sm", ".ssc"):
-			print("error: --chart only applies to SM/SSC sources", file=sys.stderr)
+		if chart is not None and suffix not in (".sm", ".ssc", ".ojn"):
+			print("error: --chart only applies to SM/SSC/OJN sources", file=sys.stderr)
 			return 1
 
 		charts = None
@@ -98,18 +100,21 @@ def command_convert(
 				]
 			case ".sm" | ".ssc":
 				charts = convert_sm(parse_sm(path.read_text(encoding="utf-8")))
-				if chart is not None:
-					if not 0 <= chart < len(charts):
-						print(
-							f"error: {path}: chart index {chart} out of range"
-							f" ({len(charts)} charts)",
-							file=sys.stderr,
-						)
-						return 1
-					charts = [charts[chart]]
+			case ".ojn":
+				charts = convert_ojn(parse_ojn(path.read_bytes()))
 			case unsupported:
 				print(f"error: {path}: unsupported file type: {unsupported}", file=sys.stderr)
 				return 1
+
+		if chart is not None:
+			if not 0 <= chart < len(charts):
+				print(
+					f"error: {path}: chart index {chart} out of range"
+					f" ({len(charts)} charts)",
+					file=sys.stderr,
+				)
+				return 1
+			charts = [charts[chart]]
 
 		for index, converted in enumerate(charts):
 			if index:
@@ -151,7 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 	convert_parser.add_argument(
 		"--chart",
 		type=int,
-		help="chart index for SM/SSC simfiles (default: all charts)",
+		help="chart index for multi-chart sources (default: all charts)",
 	)
 	convert_parser.set_defaults(handler=command_convert)
 
