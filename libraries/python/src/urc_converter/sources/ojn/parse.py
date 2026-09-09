@@ -94,7 +94,10 @@ def _decode_strings(data: bytes) -> tuple[str, str, str, str]:
 		charset = "cp949"
 	else:
 		raise UrcError("syntax", 108, "strings are neither ASCII, UTF-8, nor CP949")
-	decoded = [field.decode(charset) for field in fields]
+	try:
+		decoded = [field.decode(charset) for field in fields]
+	except UnicodeDecodeError:
+		raise UrcError("syntax", 108, "invalid string byte sequence") from None
 	return decoded[0], decoded[1], decoded[2], decoded[3]
 
 

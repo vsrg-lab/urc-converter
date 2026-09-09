@@ -6,14 +6,12 @@ module Convert =
     open UrcConverter
     open UrcConverter.Sources
     open UrcConverter.Sources.Sm.Model
+    open UrcConverter.Sources.Sm.Notes
     open UrcConverter.Sources.Sm.Parse
     open Preprocess
 
     [<Literal>]
     let private MeasureRows = 192
-
-    [<Literal>]
-    let private RollTapSpacingMs = 500
 
     let private typeRank =
         function
@@ -22,41 +20,6 @@ module Convert =
         | NoteType.LE -> 2
         | NoteType.M -> 3
         | NoteType.F -> 4
-
-    let private difficultyNames =
-        [
-            "beginner", "Beginner"
-            "easy", "Easy"
-            "basic", "Easy"
-            "light", "Easy"
-            "medium", "Medium"
-            "another", "Medium"
-            "trick", "Medium"
-            "standard", "Medium"
-            "difficult", "Medium"
-            "hard", "Hard"
-            "ssr", "Hard"
-            "maniac", "Hard"
-            "heavy", "Hard"
-            "smaniac", "Challenge"
-            "challenge", "Challenge"
-            "expert", "Challenge"
-            "oni", "Challenge"
-            "edit", "Edit"
-        ]
-        |> Map.ofList
-
-    let private difficultyName (difficulty: string) (description: string) =
-        let key = difficulty.Trim().ToLowerInvariant()
-        let name = difficultyNames |> Map.tryFind key |> Option.defaultValue "Edit"
-
-        if
-            name = "Hard"
-            && (let desc = description.Trim().ToLowerInvariant() in desc = "smaniac" || desc = "challenge")
-        then
-            "Challenge"
-        else
-            name
 
 
     // --- timing walk --------------------------------------------------------
@@ -94,74 +57,6 @@ module Convert =
             SvPoints: (int * float) list
             Anchors: int list
         }
-
-    // --- URC note assembly --------------------------------------------------
-
-    type private UrcNote = int * int * NoteType
-
-    let private buildUrcNotes
-        (timing: Timing)
-        (notes: SmNote list)
-        (headTimes: Map<int, float>)
-        (tailTimes: Map<int, float>)
-        : Result<UrcNote list, UrcError> =
-        let fakeRanges =
-            timing.Fakes
-            |> List.map (fun (beat, length) -> let start = rowsOf beat in (start, start + rowsOf length))
-
-        let rec loop (rest: SmNote list) (index: int) (acc: UrcNote list) : Result<UrcNote list, UrcError> =
-            match rest with
-            | [] -> Ok(List.rev acc)
-            | note :: tail ->
-                let headMs =
-                    headTimes
-                    |> Map.tryFind index
-                    |> Option.defaultValue 0.0
-                    |> fun sec -> Shared.roundMs (sec * 1000.0)
-
-                let inFake =
-                    fakeRanges |> List.exists (fun (start, end') -> start <= note.Row && note.Row < end')
-
-                if inFake then
-                    loop tail (index + 1) ((headMs, note.Track, NoteType.F) :: acc)
-                else
-                    match note.Kind with
-                    | Hold ->
-                        let tailMs =
-                            tailTimes
-                            |> Map.tryFind index
-                            |> Option.defaultValue 0.0
-                            |> fun sec -> Shared.roundMs (sec * 1000.0)
-
-                        if tailMs <= headMs then
-                            Error(UrcError.syntax 1 $"hold on lane {note.Track} collapses to zero length")
-                        else
-                            loop
-                                tail
-                                (index + 1)
-                                ((tailMs, note.Track, NoteType.LE)
-                                 :: (headMs, note.Track, NoteType.LS)
-                                 :: acc)
-                    | Roll ->
-                        let endMs =
-                            tailTimes
-                            |> Map.tryFind index
-                            |> Option.defaultValue 0.0
-                            |> fun sec -> Shared.roundMs (sec * 1000.0)
-
-                        let taps =
-                            [
-                                for tapMs in headMs + RollTapSpacingMs .. RollTapSpacingMs .. endMs - 1 ->
-                                    (tapMs, note.Track, NoteType.N)
-                            ]
-
-                        loop tail (index + 1) ((headMs, note.Track, NoteType.N) :: (List.append taps acc))
-                    | Mine -> loop tail (index + 1) ((headMs, note.Track, NoteType.M) :: acc)
-                    | FakeNote -> loop tail (index + 1) ((headMs, note.Track, NoteType.F) :: acc)
-                    | Tap
-                    | Lift -> loop tail (index + 1) ((headMs, note.Track, NoteType.N) :: acc)
-
-        loop notes 0 []
 
     // --- chart conversion ---------------------------------------------------
 
@@ -331,13 +226,7 @@ module Convert =
                 |> List.filter (fun part -> part <> "")
                 |> String.concat " "
 
-            let creator =
-                if chart.Credit <> "" then
-                    chart.Credit
-                elif simfile.Credit <> "" then
-                    simfile.Credit
-                else
-                    "Unknown"
+            let creator = firstNonEmpty chart.Credit simfile.Credit "Unknown"
 
             let version =
                 if chart.ChartName <> "" then

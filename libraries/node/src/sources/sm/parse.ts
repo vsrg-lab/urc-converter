@@ -1,10 +1,17 @@
 /**
  * Parser for StepMania (.sm/.ssc) simfiles.
  */
-import type { SmChart, SmFile, SmNote, Timing } from "./model.js";
+import type { SmChart, SmFile, Timing } from "./model.js";
+import {
+	beatValue,
+	expressions,
+	pairs,
+	parseFloatStrict,
+	parseIntStrict,
+	tokenize
+} from "./msd.js";
+import { parseNoteData } from "./notes.js";
 import { UrcError } from "../../error.js";
-
-const ROWS_PER_BEAT = 48;
 
 const STEP_LANES: Record<string, number> = {
 	"dance-single": 4,
@@ -221,198 +228,6 @@ function timingTag(timing: Timing, tag: string, value: string): void {
 				if (numerator >= 1 && denominator >= 1 && beat >= 0)
 					timing.timesigs.push([beat, numerator, denominator]);
 			}
-			break;
 	}
 }
 
-/**
- * Splits a simfile into MSD values (#TAG:param:...;) following MsdFile.
- */
-function tokenize(text: string): string[][] {
-	const values: string[][] = [];
-	let params: string[] = [];
-	let current = "";
-	let line = "";
-	let reading = false;
-
-	const endParam = (): void => {
-		params.push(current);
-		current = "";
-		line = "";
-	};
-
-	let i = 0;
-	const n = text.length;
-	while (i < n) {
-		if (i + 1 < n && text[i] === "/" && text[i + 1] === "/") {
-			while (i < n && text[i] !== "\n")
-				i++;
-			continue;
-		}
-		if (reading && text[i] === "#") {
-			if (line.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "") !== "") {
-				current += "#";
-				line += "#";
-				i++;
-				continue;
-			}
-			params.push(current.replace(/[ \t\r\n]+$/, ""));
-			values.push(params);
-			params = [];
-			current = "";
-			line = "";
-			reading = false;
-			continue;
-		}
-		if (!reading) {
-			if (text[i] === "#") {
-				reading = true;
-				line = "";
-			} else if (text[i] !== "\\") {
-				i++;
-				continue;
-			} else if (i + 1 < n) {
-				i += 2;
-				continue;
-			}
-			i++;
-			continue;
-		}
-		if (text[i] === ":") 
-			endParam();
-		else if (text[i] === ";") {
-			endParam();
-			values.push(params);
-			params = [];
-			current = "";
-			line = "";
-			reading = false;
-		} else if (text[i] === "\\") {
-			i++;
-			if (i < n) {
-				current += text[i];
-				line += text[i];
-			}
-		} else {
-			current += text[i];
-			line += text[i];
-		}
-		if (i < n && (text[i] === "\r" || text[i] === "\n"))
-			line = "";
-		i++;
-	}
-
-	if (reading)
-		params.push(current);
-	return values;
-}
-
-function expressions(value: string, minimum: number): string[][] {
-	const parts: string[][] = [];
-	for (const expression of value.split(",")) {
-		if (expression.trim() === "")
-			continue;
-		const fields = expression.split("=");
-		if (fields.length < minimum)
-			throw new UrcError("syntax", 1, `malformed timing expression: ${expression}`);
-		parts.push(fields);
-	}
-	return parts;
-}
-
-function pairs(value: string, skipZero = false): Array<[number, number]> {
-	const entries: Array<[number, number]> = [];
-	for (const parts of expressions(value, 2)) {
-		if (parts.length !== 2)
-			throw new UrcError("syntax", 1, `malformed timing expression: ${parts.join("=")}`);
-		const entry: [number, number] = [beatValue(parts[0]), parseFloatStrict(parts[1])];
-		if (!skipZero || entry[1] !== 0)
-			entries.push(entry);
-	}
-	return entries;
-}
-
-function beatValue(token: string): number {
-	if (/[rR]\s*$/.test(token))
-		throw new UrcError("syntax", 1, `row-format beats are not supported: ${token}`);
-	return parseFloatStrict(token);
-}
-
-function parseFloatStrict(token: string): number {
-	const text = token.trim();
-	if (!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text))
-		throw new UrcError("syntax", 1, `invalid number: ${token}`);
-	return Number(text);
-}
-
-function parseIntStrict(token: string): number {
-	const text = token.trim();
-	if (!/^[+-]?\d+$/.test(text))
-		throw new UrcError("syntax", 1, `invalid integer: ${token}`);
-	return Number(text);
-}
-
-function parseNoteData(data: string, lanes: number): SmNote[] {
-	const notes: SmNote[] = [];
-	const openHolds = new Map<number, SmNote>();
-
-	let measure = 0;
-	for (const part of data.split(",")) {
-		if (part === "")
-			continue;
-		const content = part
-			.split("\n")
-			.map(raw => raw.replace(/^[ \t\r]+/, "").replace(/[ \t\r]+$/, ""))
-			.filter(line => line !== "");
-		for (let index = 0; index < content.length; index++) {
-			const line = content[index];
-			const row = rows((measure + index / content.length) * 4);
-			let track = 0;
-			let position = 0;
-			while (track < lanes && position < line.length) {
-				const char = line[position];
-				position++;
-				if (char === "1")
-					notes.push({ row, track, kind: "tap", tailRow: null });
-				else if (char === "2" || char === "4") {
-					if (openHolds.has(track))
-						throw new UrcError("syntax", 1, `overlapping hold head at row ${row}`);
-					const note: SmNote = {
-						row,
-						track,
-						kind: char === "2" ? "hold" : "roll",
-						tailRow: null
-					};
-					notes.push(note);
-					openHolds.set(track, note);
-				} else if (char === "3") {
-					const open = openHolds.get(track);
-					if (open === undefined)
-						throw new UrcError("syntax", 1, `hold tail without a head at row ${row}`);
-					open.tailRow = row;
-					openHolds.delete(track);
-				} else if (char === "M")
-					notes.push({ row, track, kind: "mine", tailRow: null });
-				else if (char === "L")
-					notes.push({ row, track, kind: "lift", tailRow: null });
-				else if (char === "F")
-					notes.push({ row, track, kind: "fake", tailRow: null });
-				if (position < line.length && line[position] === "[") {
-					const end = line.indexOf("]", position);
-					position = end < 0 ? line.length : end + 1;
-				}
-				track++;
-			}
-		}
-		measure++;
-	}
-
-	if (openHolds.size > 0)
-		throw new UrcError("syntax", 1, "hold note without a tail");
-	return notes;
-}
-
-function rows(beats: number): number {
-	const value = beats * ROWS_PER_BEAT;
-	return value >= 0 ? Math.floor(value + 0.5) : Math.ceil(value - 0.5);
-}

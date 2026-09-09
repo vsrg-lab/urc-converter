@@ -2,6 +2,8 @@
 
 mod convert;
 mod model;
+mod msd;
+mod notes;
 mod parse;
 mod preprocess;
 

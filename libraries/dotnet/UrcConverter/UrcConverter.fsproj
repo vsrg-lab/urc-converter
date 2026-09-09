@@ -20,6 +20,7 @@
 		<Compile Include="Sources\Shared.fs" />
 		<Compile Include="Sources\Bms\Model.fs" />
 		<Compile Include="Sources\Bms\Parse.fs" />
+		<Compile Include="Sources\Bms\Channels.fs" />
 		<Compile Include="Sources\Bms\Convert.fs" />
 		<Compile Include="Sources\Osu\Model.fs" />
 		<Compile Include="Sources\Osu\Parse.fs" />
@@ -29,6 +30,8 @@
 		<Compile Include="Sources\Qua\Convert.fs" />
 		<Compile Include="Sources\Sm\Model.fs" />
 		<Compile Include="Sources\Sm\Preprocess.fs" />
+		<Compile Include="Sources\Sm\Msd.fs" />
+		<Compile Include="Sources\Sm\Notes.fs" />
 		<Compile Include="Sources\Sm\Parse.fs" />
 		<Compile Include="Sources\Sm\Convert.fs" />
 		<Compile Include="Sources\Ojn\Model.fs" />

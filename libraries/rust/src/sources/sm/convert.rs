@@ -1,15 +1,15 @@
 //! Mapper from the StepMania source model onto URC charts.
 
-use crate::error::{Result, UrcError};
+use crate::error::Result;
 use crate::model::{Chart, Layout, Metadata, Note, NoteType, Version};
 
 use super::super::shared::{build_timing, check_hold_overlap, round_ms};
-use super::model::{NoteKind, SmChart, SmFile, SmNote, Timing};
+use super::model::{SmChart, SmFile};
+use super::notes::{build_urc_notes, difficulty_name, first_non_empty};
 use super::parse::resolve_lanes;
 use super::preprocess::{filter_notes, preprocess, rows, warp_intervals};
 
 const MEASURE_ROWS: i64 = 192;
-const ROLL_TAP_SPACING_MS: i64 = 500;
 
 type BpmPoint = (i64, f64, u64, u64);
 
@@ -230,97 +230,4 @@ fn convert_chart(simfile: &SmFile, chart: &SmChart) -> Result<Chart> {
     })
 }
 
-type UrcNote = (i64, u32, NoteType);
-
-fn build_urc_notes(
-    timing: &Timing,
-    notes: &[SmNote],
-    head_times: &[f64],
-    tail_times: &[f64],
-) -> Result<Vec<UrcNote>> {
-    let fake_ranges: Vec<(i64, i64)> = timing
-        .fakes
-        .iter()
-        .map(|&(beat, length)| (rows(beat), rows(beat) + rows(length)))
-        .collect();
-    let mut urc_notes: Vec<UrcNote> = Vec::new();
-
-    for (index, note) in notes.iter().enumerate() {
-        let head_ms = round_ms(head_times[index] * 1000.0);
-        if fake_ranges.iter().any(|&(start, end)| start <= note.row && note.row < end) {
-            urc_notes.push((head_ms, note.track, NoteType::F));
-            continue;
-        }
-        match note.kind {
-            NoteKind::Hold => {
-                let tail_ms = round_ms(tail_times[index] * 1000.0);
-                if tail_ms <= head_ms {
-                    return Err(UrcError::new(
-                        "syntax",
-                        1,
-                        format!("hold on lane {} collapses to zero length", note.track),
-                    ));
-                }
-                urc_notes.push((head_ms, note.track, NoteType::Ls));
-                urc_notes.push((tail_ms, note.track, NoteType::Le));
-            }
-            NoteKind::Roll => {
-                let end_ms = round_ms(tail_times[index] * 1000.0);
-                urc_notes.push((head_ms, note.track, NoteType::N));
-                let mut tap_ms = head_ms + ROLL_TAP_SPACING_MS;
-                while tap_ms < end_ms {
-                    urc_notes.push((tap_ms, note.track, NoteType::N));
-                    tap_ms += ROLL_TAP_SPACING_MS;
-                }
-            }
-            NoteKind::Mine => urc_notes.push((head_ms, note.track, NoteType::M)),
-            NoteKind::Fake => urc_notes.push((head_ms, note.track, NoteType::F)),
-            NoteKind::Tap | NoteKind::Lift => urc_notes.push((head_ms, note.track, NoteType::N)),
-        }
-    }
-    Ok(urc_notes)
-}
-
-fn first_non_empty<'a>(first: &'a str, second: &'a str, fallback: &'a str) -> &'a str {
-    if !first.is_empty() {
-        first
-    } else if !second.is_empty() {
-        second
-    } else {
-        fallback
-    }
-}
-
-fn difficulty_name(difficulty: &str, description: &str) -> &'static str {
-    const NAMES: &[(&str, &str)] = &[
-        ("beginner", "Beginner"),
-        ("easy", "Easy"),
-        ("basic", "Easy"),
-        ("light", "Easy"),
-        ("medium", "Medium"),
-        ("another", "Medium"),
-        ("trick", "Medium"),
-        ("standard", "Medium"),
-        ("difficult", "Medium"),
-        ("hard", "Hard"),
-        ("ssr", "Hard"),
-        ("maniac", "Hard"),
-        ("heavy", "Hard"),
-        ("smaniac", "Challenge"),
-        ("challenge", "Challenge"),
-        ("expert", "Challenge"),
-        ("oni", "Challenge"),
-        ("edit", "Edit"),
-    ];
-    let key = difficulty.trim().to_lowercase();
-    let mut name = NAMES
-        .iter()
-        .find(|entry| entry.0 == key)
-        .map(|entry| entry.1)
-        .unwrap_or("Edit");
-    if name == "Hard" && matches!(description.trim().to_lowercase().as_str(), "smaniac" | "challenge") {
-        name = "Challenge";
-    }
-    name
-}
 
