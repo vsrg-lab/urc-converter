@@ -1,0 +1,148 @@
+<ui:FluentWindow x:Class="UrcConverter.Gui.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="URC Converter"
+                 Width="1120" Height="740"
+                 MinWidth="860" MinHeight="520"
+                 WindowStartupLocation="CenterScreen"
+                 ExtendsContentIntoTitleBar="True"
+                 AllowDrop="True"
+                 DragOver="Window_DragOver"
+                 Drop="Window_Drop">
+	<ui:FluentWindow.Resources>
+		<BooleanToVisibilityConverter x:Key="BoolToVis" />
+	</ui:FluentWindow.Resources>
+
+	<Grid>
+		<Grid.RowDefinitions>
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="*" />
+			<RowDefinition Height="Auto" />
+		</Grid.RowDefinitions>
+
+		<ui:TitleBar Grid.Row="0" Title="URC Converter" ShowMaximize="True" />
+
+		<StackPanel Grid.Row="1" Orientation="Horizontal" Margin="16,8,16,12">
+			<ui:Button Appearance="Primary"
+			           Icon="{ui:SymbolIcon Folder24}"
+			           Content="Open…"
+			           Command="{Binding OpenFileCommand}" />
+			<ui:Button Margin="8,0,0,0"
+			           Icon="{ui:SymbolIcon Save24}"
+			           Content="Save as URC…"
+			           Command="{Binding SaveCommand}" />
+		</StackPanel>
+
+		<Grid Grid.Row="2" Margin="16,0,16,8">
+			<Grid.ColumnDefinitions>
+				<ColumnDefinition Width="330" />
+				<ColumnDefinition Width="Auto" />
+				<ColumnDefinition Width="*" />
+			</Grid.ColumnDefinitions>
+
+			<DockPanel Grid.Column="0" Margin="0,0,12,0">
+				<ui:Card DockPanel.Dock="Top" Padding="12,10" Margin="0,0,0,10">
+					<DockPanel>
+						<ui:SymbolIcon DockPanel.Dock="Left" Symbol="Document24" Margin="0,0,10,0" VerticalAlignment="Center" />
+						<TextBlock Text="{Binding FilePath, TargetNullValue=—}"
+						           TextTrimming="CharacterEllipsis"
+						           ToolTip="{Binding FilePath}"
+						           VerticalAlignment="Center" />
+					</DockPanel>
+				</ui:Card>
+
+				<StackPanel DockPanel.Dock="Bottom"
+				            Margin="0,10,0,0"
+				            Visibility="{Binding IsBmsSource, Converter={StaticResource BoolToVis}}">
+					<ui:Card Padding="12">
+						<StackPanel>
+							<TextBlock Text="BMS branch options" FontWeight="SemiBold" Margin="0,0,0,8" />
+							<ui:TextBox PlaceholderText="Seed (e.g. 42)"
+							            Text="{Binding SeedText, UpdateSourceTrigger=LostFocus}"
+							            Margin="0,0,0,8" />
+							<ui:TextBox PlaceholderText="Branch picks (e.g. 2,1)"
+							            Text="{Binding BranchesText, UpdateSourceTrigger=LostFocus}" />
+						</StackPanel>
+					</ui:Card>
+				</StackPanel>
+
+				<TextBlock DockPanel.Dock="Top" Text="Charts" FontWeight="SemiBold" Margin="2,0,0,6" />
+				<ui:ListView ItemsSource="{Binding Charts}"
+				             SelectedItem="{Binding SelectedChart}"
+				             HorizontalContentAlignment="Stretch"
+				             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+					<ui:ListView.ItemTemplate>
+						<DataTemplate>
+							<StackPanel Orientation="Horizontal" Margin="2,4">
+								<Border CornerRadius="4"
+								        Background="{DynamicResource ControlFillColorDefaultBrush}"
+								        Padding="6,2"
+								        MinWidth="26">
+									<TextBlock Text="{Binding Index}" HorizontalAlignment="Center" />
+								</Border>
+								<TextBlock Text="{Binding Name}" Margin="10,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+							</StackPanel>
+						</DataTemplate>
+					</ui:ListView.ItemTemplate>
+				</ui:ListView>
+			</DockPanel>
+
+			<GridSplitter Grid.Column="1" Width="5" Background="Transparent" ResizeBehavior="CurrentAndNext" />
+
+			<Grid Grid.Column="2" Margin="12,0,0,0">
+				<Grid.RowDefinitions>
+					<RowDefinition Height="Auto" />
+					<RowDefinition Height="*" />
+				</Grid.RowDefinitions>
+
+				<ui:Card Grid.Row="0" Padding="12" Margin="0,0,0,10">
+					<ui:Card.Style>
+						<Style TargetType="ui:Card" BasedOn="{StaticResource {x:Type ui:Card}}">
+							<Style.Triggers>
+								<DataTrigger Binding="{Binding SummaryText}" Value="">
+									<Setter Property="Visibility" Value="Collapsed" />
+								</DataTrigger>
+							</Style.Triggers>
+						</Style>
+					</ui:Card.Style>
+					<TextBlock Text="{Binding SummaryText}"
+					           FontFamily="Cascadia Mono,Consolas,Courier New"
+					           TextWrapping="Wrap" />
+				</ui:Card>
+
+				<DockPanel Grid.Row="1">
+					<TextBlock DockPanel.Dock="Top" Text="Preview" FontWeight="SemiBold" Margin="2,0,0,6" />
+					<TextBox Text="{Binding PreviewText}"
+					         IsReadOnly="True"
+					         IsReadOnlyCaretVisible="True"
+					         FontFamily="Cascadia Mono,Consolas,Courier New"
+					         FontSize="12.5"
+					         TextWrapping="NoWrap"
+					         AcceptsReturn="True"
+					         VerticalScrollBarVisibility="Auto"
+					         HorizontalScrollBarVisibility="Auto" />
+				</DockPanel>
+			</Grid>
+		</Grid>
+
+		<Border Grid.Row="3"
+		        BorderThickness="0,1,0,0"
+		        BorderBrush="{DynamicResource DividerFillColorDefaultBrush}"
+		        Padding="16,7,16,7">
+			<TextBlock Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis">
+				<TextBlock.Style>
+					<Style TargetType="TextBlock">
+						<Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+						<Style.Triggers>
+							<DataTrigger Binding="{Binding IsError}" Value="True">
+								<Setter Property="Foreground" Value="#FF6E6E" />
+							</DataTrigger>
+						</Style.Triggers>
+					</Style>
+				</TextBlock.Style>
+			</TextBlock>
+		</Border>
+	</Grid>
+</ui:FluentWindow>

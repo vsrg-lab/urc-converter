@@ -3,4 +3,5 @@
     <File Path=".editorconfig" />
   </Folder>
   <Project Path="libraries/dotnet/UrcConverter/UrcConverter.fsproj" />
+  <Project Path="apps/gui/UrcConverter.Gui.csproj" />
 </Solution>
