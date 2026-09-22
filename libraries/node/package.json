@@ -16,7 +16,8 @@
 	],
 	"scripts": {
 		"build": "tsc",
-		"lint": "eslint ."
+		"lint": "eslint .",
+		"prepublishOnly": "pnpm run build"
 	},
 	"engines": {
 		"node": ">=24",
