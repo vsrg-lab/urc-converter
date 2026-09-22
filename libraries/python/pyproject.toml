@@ -2,6 +2,7 @@
 name = "urc-converter"
 version = "0.1.0"
 description = "URC (Universal Rhythm Chart) parser and converter library"
+readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
 authors = [
