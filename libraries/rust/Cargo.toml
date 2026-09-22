@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 description = "URC (Universal Rhythm Chart) parser and converter library"
 license = "MIT"
+repository = "https://github.com/vsrg-lab/urc-converter"
+documentation = "https://docs.rs/urc-converter"
+readme = "README.md"
 
 [lib]
 name = "urc_converter"
