@@ -23,20 +23,20 @@ source line.
 
 | Path               | Contents                       |
 | ------------------ | ------------------------------ |
-| `libraries/python` | Python library (uv, hatchling) |
-| `libraries/node`   | TypeScript library (pnpm)      |
-| `libraries/dotnet` | F# library (FParsec)           |
+| `libraries/python` | Python library                 |
+| `libraries/node`   | TypeScript library             |
+| `libraries/dotnet` | F# library		              |
 | `libraries/rust`   | Rust crate                     |
 | `apps/cli`         | Python CLI                     |
-| `apps/gui`         | WPF GUI (planned)              |
+| `apps/gui`         | WPF GUI				          |
 
-## Supported source formats (planned)
+## Supported source formats
 
 - osu!mania `.osu`
 - Quaver `.qua`
 - BMS family: `.bms`, `.bme`, `.bml`, `.pms`
 - StepMania `.sm`, `.ssc`
-- DJMAX `.ojn`
+- O2Jam `.ojn`
 - Image-based charts
 
 Conversion is one-way: source formats to URC.
