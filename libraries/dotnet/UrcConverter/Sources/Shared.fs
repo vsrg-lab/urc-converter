@@ -24,7 +24,7 @@ module internal Shared =
         let rec loop rest =
             match rest with
             | [] -> None
-            | (time, bpm, beats, _) :: tail ->
+            | (time, bpm, beats, noteValue) :: tail ->
                 let nextTime =
                     match tail with
                     | (next, _, _, _) :: _ -> Some next
@@ -38,19 +38,22 @@ module internal Shared =
                         | Some next -> timeMs < next
                         | None -> true
 
-                    let measureMs = float beats * 60000.0 / bpm
+                    if inSegment && bpm > 0.0 && beats > 0 && noteValue > 0 then
+                        let measureMs = float beats * (4.0 / float noteValue) * 60000.0 / bpm
 
-                    if inSegment && measureMs > 0.0 then
-                        let k = ceil (float (timeMs - time) / measureMs - 1e-9)
-                        let anchor = float time + k * measureMs
+                        if measureMs > 0.0 then
+                            let k = ceil (float (timeMs - time) / measureMs - 1e-9)
+                            let anchor = float time + k * measureMs
 
-                        Some(
-                            roundMs (
-                                match nextTime with
-                                | Some next -> min anchor (float next)
-                                | None -> anchor
+                            Some(
+                                roundMs (
+                                    match nextTime with
+                                    | Some next -> min anchor (float next)
+                                    | None -> anchor
+                                )
                             )
-                        )
+                        else
+                            loop tail
                     else
                         loop tail
 

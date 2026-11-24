@@ -3,6 +3,7 @@ namespace UrcConverter.Sources.Sm
 [<RequireQualifiedAccess>]
 module Parse =
 
+    open System
     open FsToolkit.ErrorHandling
     open UrcConverter
     open UrcConverter.Sources.Sm.Model
@@ -82,7 +83,11 @@ module Parse =
 
     let private timingTag (timing: Timing) (tag: string) (value: string) : Result<Timing, UrcError> =
         match tag with
-        | "OFFSET" -> parseFloat value |> Result.map (fun offset -> { timing with Offset = offset })
+        | "OFFSET" ->
+            if String.IsNullOrWhiteSpace value then
+                Ok { timing with Offset = 0.0 }
+            else
+                parseFloat value |> Result.map (fun offset -> { timing with Offset = offset })
         | "BPMS" ->
             pairs value true
             |> Result.map (fun entries -> { timing with Bpms = prependReversed entries timing.Bpms })
@@ -91,8 +96,10 @@ module Parse =
             pairs value true
             |> Result.map (fun entries -> { timing with Stops = prependReversed entries timing.Stops })
         | "DELAYS" ->
-            pairs value true
-            |> Result.map (fun entries -> { timing with Delays = prependReversed entries timing.Delays })
+            pairs value false
+            |> Result.map (fun entries ->
+                let positive = List.filter (fun (_, seconds) -> seconds > 0.0) entries
+                { timing with Delays = prependReversed positive timing.Delays })
         | "WARPS" ->
             pairs value false
             |> Result.map (fun entries -> { timing with Warps = prependReversed entries timing.Warps })
@@ -128,85 +135,107 @@ module Parse =
                 { timing with TimeSignatures = prependReversed valid timing.TimeSignatures })
         | _ -> Ok timing
 
+    let private finalizePending
+        (simfile: SmFile)
+        (pending: (SmChart * string option) option)
+        : Result<SmFile, UrcError> =
+        match pending with
+        | Some(openChart, Some rawNotes) ->
+            resolveLanes openChart.StepsType
+            |> Result.bind (fun lanes -> parseNoteData rawNotes lanes)
+            |> Result.map (fun notes ->
+                let finalized =
+                    { openChart with
+                        Timing = openChart.Timing |> Option.map finalizeTiming
+                        Notes = notes
+                    }
+
+                { simfile with Charts = finalized :: simfile.Charts })
+        | _ -> Ok simfile
+
     /// Parses a .sm or .ssc simfile into its source model.
     let parse (text: string) : Result<SmFile, UrcError> =
-        let applyTag (simfile: SmFile, chart: SmChart option) (params_: string list) : Result<SmFile * SmChart option, UrcError> =
+        let applyTag
+            (simfile: SmFile, pending: (SmChart * string option) option)
+            (params_: string list)
+            : Result<SmFile * (SmChart * string option) option, UrcError> =
             match params_ with
-            | [] -> Ok(simfile, chart)
+            | [] -> Ok(simfile, pending)
             | rawTag :: rest ->
                 let tag = rawTag.ToUpperInvariant()
                 let value = match rest with | v :: _ -> v | [] -> ""
 
                 if tag = "NOTEDATA" then
-                    Ok(simfile, Some SmChart.Empty)
+                    finalizePending simfile pending
+                    |> Result.map (fun nextSim -> nextSim, Some(SmChart.Empty, None))
                 elif tag = "NOTES" || tag = "NOTES2" then
-                    match chart, rest with
-                    | Some openChart, _ ->
-                        resolveLanes openChart.StepsType
-                        |> Result.bind (fun lanes -> parseNoteData value lanes)
-                        |> Result.map (fun notes ->
-                            let finalized =
-                                { openChart with
-                                    Timing = openChart.Timing |> Option.map finalizeTiming
-                                    Notes = notes
+                    match pending, rest with
+                    | Some(openChart, _), _ when List.length params_ < 7 ->
+                        Ok(simfile, Some(openChart, Some value))
+                    | _, stepsType :: description :: difficulty :: _ :: _ :: noteData :: _ ->
+                        result {
+                            let! nextSim = finalizePending simfile pending
+
+                            let block =
+                                { SmChart.Empty with
+                                    StepsType = stepsType.Trim()
+                                    Description = description.Trim()
+                                    Difficulty = difficulty.Trim()
+                                    Credit = description.Trim()
                                 }
 
-                            { simfile with Charts = finalized :: simfile.Charts }, None)
-                    | None, stepsType :: description :: difficulty :: _ :: _ :: noteData :: _ ->
-                        let block =
-                            { SmChart.Empty with
-                                StepsType = stepsType.Trim()
-                                Description = description.Trim()
-                                Difficulty = difficulty.Trim()
-                                Credit = description.Trim()
-                            }
-
-                        resolveLanes block.StepsType
-                        |> Result.bind (fun lanes -> parseNoteData noteData lanes)
-                        |> Result.map (fun notes ->
-                            { simfile with Charts = { block with Notes = notes } :: simfile.Charts }, None)
-                    | None, _ -> Ok(simfile, chart)
+                            let! lanes = resolveLanes block.StepsType
+                            let! notes = parseNoteData noteData lanes
+                            return { nextSim with Charts = { block with Notes = notes } :: nextSim.Charts }, None
+                        }
+                    | _ -> Ok(simfile, pending)
                 else
-                    match chart with
+                    match pending with
                     | None ->
                         match tag with
-                        | "TITLE" -> Ok({ simfile with Title = value }, chart)
-                        | "SUBTITLE" -> Ok({ simfile with Subtitle = value }, chart)
-                        | "ARTIST" -> Ok({ simfile with Artist = value }, chart)
-                        | "CREDIT" -> Ok({ simfile with Credit = value }, chart)
+                        | "TITLE" -> Ok({ simfile with Title = value }, pending)
+                        | "SUBTITLE" -> Ok({ simfile with Subtitle = value }, pending)
+                        | "ARTIST" -> Ok({ simfile with Artist = value }, pending)
+                        | "CREDIT" -> Ok({ simfile with Credit = value }, pending)
                         | _ ->
                             timingTag simfile.Timing tag value
-                            |> Result.map (fun timing -> { simfile with Timing = timing }, chart)
-                    | Some openChart ->
+                            |> Result.map (fun timing -> { simfile with Timing = timing }, pending)
+                    | Some(openChart, rawNotes) ->
                         match tag with
-                        | "STEPSTYPE" -> Ok(simfile, Some { openChart with StepsType = value.Trim() })
-                        | "DESCRIPTION" -> Ok(simfile, Some { openChart with Description = value.Trim() })
-                        | "DIFFICULTY" -> Ok(simfile, Some { openChart with Difficulty = value.Trim() })
-                        | "CHARTNAME" -> Ok(simfile, Some { openChart with ChartName = value.Trim() })
-                        | "CREDIT" -> Ok(simfile, Some { openChart with Credit = value })
+                        | "STEPSTYPE" -> Ok(simfile, Some({ openChart with StepsType = value.Trim() }, rawNotes))
+                        | "DESCRIPTION" -> Ok(simfile, Some({ openChart with Description = value.Trim() }, rawNotes))
+                        | "DIFFICULTY" -> Ok(simfile, Some({ openChart with Difficulty = value.Trim() }, rawNotes))
+                        | "CHARTNAME" -> Ok(simfile, Some({ openChart with ChartName = value.Trim() }, rawNotes))
+                        | "CREDIT" -> Ok(simfile, Some({ openChart with Credit = value }, rawNotes))
                         | _ when timingTags.Contains tag ->
-                            let baseTiming =
-                                match openChart.Timing with
-                                | Some timing -> timing
-                                | None -> { Timing.Empty with Offset = simfile.Timing.Offset }
+                            if String.IsNullOrWhiteSpace value then
+                                Ok(simfile, pending)
+                            else
+                                let baseTiming =
+                                    match openChart.Timing with
+                                    | Some timing -> timing
+                                    | None -> { Timing.Empty with Offset = simfile.Timing.Offset }
 
-                            timingTag baseTiming tag value
-                            |> Result.map (fun timing -> simfile, Some { openChart with Timing = Some timing })
-                        | _ -> Ok(simfile, Some openChart)
+                                timingTag baseTiming tag value
+                                |> Result.map (fun timing ->
+                                    simfile, Some({ openChart with Timing = Some timing }, rawNotes))
+                        | _ -> Ok(simfile, pending)
 
         let rec loop state remaining =
             match remaining with
             | [] ->
-                let simfile, _ = state
+                let simfile, pending = state
 
-                if List.isEmpty simfile.Charts then
-                    Error(UrcError.syntax 1 "no chart in simfile")
-                else
-                    Ok
-                        { simfile with
-                            Timing = finalizeTiming simfile.Timing
-                            Charts = List.rev simfile.Charts
-                        }
+                finalizePending simfile pending
+                |> Result.bind (fun completed ->
+                    if List.isEmpty completed.Charts then
+                        Error(UrcError.syntax 1 "no chart in simfile")
+                    else
+                        Ok
+                            { completed with
+                                Timing = finalizeTiming completed.Timing
+                                Charts = List.rev completed.Charts
+                            })
             | params_ :: rest ->
                 match applyTag state params_ with
                 | Ok next -> loop next rest

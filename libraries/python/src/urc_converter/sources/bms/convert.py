@@ -36,6 +36,7 @@ def convert_bms(chart: BmsChart) -> Chart:
 	entries: list[tuple[float, int, str, float | int]] = [(0.0, 0, "bpm", chart.bpm)]
 	objects: list[tuple[float, str, str]] = []
 	used: set[tuple[int, str]] = set()
+	ln_channels: set[str] = set()
 
 	for measure in range(max_measure + 1):
 		rate = chart.rates.get(measure, 1.0)
@@ -44,7 +45,7 @@ def convert_bms(chart: BmsChart) -> Chart:
 			if abs(beats - round(beats)) < 1e-9 and round(beats) >= 1:
 				entries.append((boundaries[measure], 3, "meter", round(beats)))
 
-		for channel, ids in chart.measures.get(measure, {}).items():
+		for channel, ids in sorted(chart.measures.get(measure, {}).items()):
 			for index, obj in enumerate(ids):
 				y = boundaries[measure] + (index / len(ids)) * rate
 
@@ -52,12 +53,15 @@ def convert_bms(chart: BmsChart) -> Chart:
 					if obj == "00":
 						continue
 					if channel == "03":
-						digits = _id_value(obj, chart.base)
-						entries.append((y, 0, "bpm", float((digits // 36) * 16 + digits % 36)))
+						bpm_val = _hex_bpm(obj)
+						entries.append((y, 0, "bpm", bpm_val))
 					elif channel == "08":
 						if obj not in chart.bpm_defs:
 							raise UrcError("syntax", 1, f"undefined #BPM{obj}")
-						entries.append((y, 0, "bpm", chart.bpm_defs[obj]))
+						bpm_val = chart.bpm_defs[obj]
+						if bpm_val <= 0:
+							raise UrcError("syntax", 1, f"non-positive #BPM{obj}: {bpm_val}")
+						entries.append((y, 0, "bpm", bpm_val))
 					elif channel == "09":
 						if obj not in chart.stop_defs:
 							raise UrcError("syntax", 1, f"undefined #STOP{obj}")
@@ -71,12 +75,23 @@ def convert_bms(chart: BmsChart) -> Chart:
 				kind = _channel_kind(channel)
 				if kind is None:
 					continue
+				if kind == "ln":
+					ln_channels.add(channel)
 				if obj != "00":
 					used.add((_SIDE_OF[channel[0]], channel[1]))
 				if obj == "00" and kind != "ln":
 					continue
 				objects.append((y, channel, obj))
 				entries.append((y, 4, "object", len(objects) - 1))
+
+	if chart.lntype == 2 and ln_channels:
+		for channel in sorted(ln_channels):
+			for measure in range(max_measure + 1):
+				if channel not in chart.measures.get(measure, {}):
+					objects.append((boundaries[measure], channel, "00"))
+					entries.append((boundaries[measure], 4, "object", len(objects) - 1))
+			objects.append((boundaries[max_measure + 1], channel, "00"))
+			entries.append((boundaries[max_measure + 1], 4, "object", len(objects) - 1))
 
 	entries.extend((y, 5, "anchor", 0) for y in boundaries)
 
@@ -106,7 +121,7 @@ def convert_bms(chart: BmsChart) -> Chart:
 			elif kind == "meter":
 				new_beats = value
 			elif kind == "stop":
-				pending_stop = _MEASURE_US * value / new_bpm
+				pending_stop += _MEASURE_US * value / new_bpm
 			elif kind == "scroll":
 				scroll = value
 			elif kind == "anchor":
@@ -161,18 +176,28 @@ def convert_bms(chart: BmsChart) -> Chart:
 	)
 
 
+def _hex_bpm(obj: str) -> float:
+	try:
+		value = int(obj, 16)
+	except ValueError:
+		raise UrcError("syntax", 1, f"invalid hex BPM in channel 03: {obj!r}") from None
+	return float(value)
+
+
 def _build_notes(
 	chart: BmsChart,
 	mode: str,
 	objects: list[tuple[float, str, str]],
 	timed: list[float],
 ) -> list[tuple[int, int, NoteType]]:
-	streams: dict[str, list[tuple[float, str]]] = {}
-	for index, (_y, channel, obj) in enumerate(objects):
-		streams.setdefault(channel, []).append((timed[index], obj))
+	streams: dict[str, list[tuple[float, float, str]]] = {}
+	for index, (y, channel, obj) in enumerate(objects):
+		streams.setdefault(channel, []).append((y, timed[index], obj))
 
 	notes: list[tuple[int, int, NoteType]] = []
-	for channel, stream in streams.items():
+	for channel, raw_stream in sorted(streams.items()):
+		raw_stream.sort(key=lambda item: item[0])
+		stream = [(time, obj) for _y, time, obj in raw_stream]
 		lane = _lane(mode, channel)
 		if lane is None:
 			continue
@@ -185,18 +210,19 @@ def _build_notes(
 		else:
 			pending: float | None = None
 			for time, obj in stream:
-				if chart.lnobj is not None and obj == chart.lnobj and pending is not None:
-					ls_ms = round_ms(pending / 1000.0)
-					le_ms = round_ms(time / 1000.0)
-					if le_ms <= ls_ms:
-						raise UrcError(
-							ZERO_LENGTH_HOLD,
-							1,
-							f"zero-length hold on lane {lane} at {ls_ms}ms",
-						)
-					notes.append((ls_ms, lane, NoteType.LS))
-					notes.append((le_ms, lane, NoteType.LE))
-					pending = None
+				if chart.lnobj is not None and obj == chart.lnobj:
+					if pending is not None:
+						ls_ms = round_ms(pending / 1000.0)
+						le_ms = round_ms(time / 1000.0)
+						if le_ms <= ls_ms:
+							raise UrcError(
+								ZERO_LENGTH_HOLD,
+								1,
+								f"zero-length hold on lane {lane} at {ls_ms}ms",
+							)
+						notes.append((ls_ms, lane, NoteType.LS))
+						notes.append((le_ms, lane, NoteType.LE))
+						pending = None
 				else:
 					if pending is not None:
 						notes.append((round_ms(pending / 1000.0), lane, NoteType.N))
@@ -336,14 +362,3 @@ def _lane(mode: str, channel: str) -> int | None:
 				return base + 8
 		return None
 	return None
-
-
-def _id_value(text: str, base: int) -> int:
-	def digit(char: str) -> int:
-		if char.isdigit():
-			return int(char)
-		if "A" <= char <= "Z":
-			return ord(char) - ord("A") + 10
-		return ord(char) - ord("a") + 36
-
-	return digit(text[0]) * base + digit(text[1])

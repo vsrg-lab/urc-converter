@@ -7,16 +7,19 @@ import type { OjnDifficulty, OjnEvent, OjnFile } from "./model.js";
 const STRING_RANGES: ReadonlyArray<readonly [number, number]> = [
 	[108, 172],
 	[172, 204],
-	[204, 236],
-	[236, 268]
+	[204, 236]
 ];
+
+const ENCODINGS = ["utf-8", "euc-kr"] as const;
 
 /**
  * Parses a plain or encrypted ("new" magic) OJN file into its source model.
  */
 export function parseOjn(bytes: Uint8Array): OjnFile {
 	const data =
-		bytes.length >= 8 && String.fromCharCode(...bytes.subarray(0, 3)) === "new"
+		bytes.length >= 8
+		&& String.fromCharCode(...bytes.subarray(0, 3)) === "new"
+		&& String.fromCharCode(...bytes.subarray(4, 8)) !== "ojn\x00"
 			? decrypt(bytes)
 			: bytes;
 	if (data.length < 300)
@@ -25,7 +28,7 @@ export function parseOjn(bytes: Uint8Array): OjnFile {
 		throw new UrcError("syntax", 4, "invalid OJN signature");
 	const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
 	const bpm = view.getFloat32(16, true);
-	if (bpm <= 0)
+	if (!Number.isFinite(bpm) || bpm <= 0)
 		throw new UrcError("syntax", 16, "header BPM must be positive");
 
 	const [title, artist, noter] = decodeStrings(data);
@@ -34,16 +37,26 @@ export function parseOjn(bytes: Uint8Array): OjnFile {
 	const noteOffsets = [284, 288, 292].map(offset => view.getInt32(offset, true));
 	const coverOffset = view.getInt32(296, true);
 	for (let index = 0; index < 3; index++) {
-		if (packageCounts[index] === 0)
+		const count = packageCounts[index];
+		if (count < 0)
+			throw new UrcError("syntax", 64 + index * 4, "negative package count");
+		if (count === 0)
 			continue;
-		const endRaw = index < 2 ? noteOffsets[index + 1] : coverOffset;
-		difficulties.push(
-			readDifficulty(view, index, noteOffsets[index], Math.min(Math.max(endRaw, 0), data.length), packageCounts[index])
-		);
+		const start = noteOffsets[index];
+		const end = sectionEnd(start, noteOffsets, coverOffset, data.length);
+		difficulties.push(readDifficulty(view, index, start, end, count));
 	}
 	if (difficulties.length === 0)
 		throw new UrcError("syntax", 0, "no difficulty with note packages");
 	return { title, artist, noter, bpm, difficulties };
+}
+
+function sectionEnd(start: number, noteOffsets: number[], coverOffset: number, fileLen: number): number {
+	let bound = fileLen;
+	for (const candidate of [...noteOffsets, coverOffset])
+		if (candidate > start && candidate < bound)
+			bound = candidate;
+	return Math.min(bound, fileLen);
 }
 
 function decrypt(bytes: Uint8Array): Uint8Array {
@@ -76,7 +89,7 @@ function readDifficulty(
 			throw new UrcError("syntax", offset, "note section truncated");
 		const measure = view.getInt32(offset, true);
 		const channel = view.getUint16(offset + 4, true);
-		const total = view.getInt16(offset + 6, true);
+		const total = view.getUint16(offset + 6, true);
 		if (measure < 0)
 			throw new UrcError("syntax", offset, "negative measure index");
 		offset += 8;
@@ -87,7 +100,7 @@ function readDifficulty(
 			if (channel <= 1) {
 				const value = view.getFloat32(offset, true);
 				offset += 4;
-				if (value <= 0)
+				if (!Number.isFinite(value) || value <= 0)
 					continue;
 				events.push({ measure, position, channel, value, kind: 0, offset: offset - 4 });
 			} else {
@@ -104,40 +117,21 @@ function readDifficulty(
 }
 
 function decodeStrings(data: Uint8Array): [string, string, string] {
-	const fields = STRING_RANGES.map(([start, end]) => {
+	const decoded = STRING_RANGES.map(([start, end]) => {
 		const field = data.subarray(start, end);
 		const nul = field.indexOf(0);
-		return nul === -1 ? field : field.subarray(0, nul);
+		return decodeField(nul === -1 ? field : field.subarray(0, nul));
 	});
-	const blobLength = fields.reduce((sum, field) => sum + field.length, 0);
-	const blob = new Uint8Array(blobLength);
-	let cursor = 0;
-	for (const field of fields) {
-		blob.set(field, cursor);
-		cursor += field.length;
-	}
-	const label = blob.every(byte => byte < 0x80)
-		? "utf-8"
-		: decodesAs(blob, "utf-8")
-			? "utf-8"
-			: decodesAs(blob, "euc-kr")
-				? "euc-kr"
-				: null;
-	if (label === null)
-		throw new UrcError("syntax", 108, "strings are neither ASCII, UTF-8, nor CP949");
-	const decoder = new TextDecoder(label, { fatal: true });
-	try {
-		return [decoder.decode(fields[0]), decoder.decode(fields[1]), decoder.decode(fields[2])];
-	} catch {
-		throw new UrcError("syntax", 108, "invalid string byte sequence");
-	}
+	return [decoded[0], decoded[1], decoded[2]];
 }
 
-function decodesAs(bytes: Uint8Array, label: string): boolean {
-	try {
-		new TextDecoder(label, { fatal: true }).decode(bytes);
-		return true;
-	} catch {
-		return false;
-	}
+function decodeField(field: Uint8Array): string {
+	for (const label of ENCODINGS)
+		try {
+			return new TextDecoder(label, { fatal: true }).decode(field);
+		} catch {
+			continue;
+		}
+
+	throw new UrcError("syntax", 108, "undecodable OJN metadata string");
 }

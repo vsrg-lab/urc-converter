@@ -58,25 +58,48 @@ pub fn resolve_lanes(steps_type: &str) -> Result<u32> {
         .ok_or_else(|| UrcError::new("unsupported-version", 1, format!("unsupported steps type: {shown}")))
 }
 
+struct PendingChart {
+    chart: SmChart,
+    raw_notes: Option<String>,
+}
+
+fn finalize_pending(simfile: &mut SmFile, pending: Option<PendingChart>) -> Result<()> {
+    if let Some(PendingChart {
+        mut chart,
+        raw_notes: Some(raw),
+    }) = pending
+    {
+        let lanes = resolve_lanes(&chart.steps_type)?;
+        chart.notes = parse_note_data(&raw, lanes)?;
+        simfile.charts.push(chart);
+    }
+    Ok(())
+}
+
 /// Parses a `.sm` or `.ssc` simfile into its source model.
 pub fn parse_sm(text: &str) -> Result<SmFile> {
     let mut simfile = SmFile::default();
-    let mut chart: Option<SmChart> = None;
+    let mut pending: Option<PendingChart> = None;
 
     for params in tokenize(text) {
         let tag = params[0].to_uppercase();
         let value = params.get(1).cloned().unwrap_or_default();
 
         if tag == "NOTEDATA" {
-            chart = Some(SmChart::default());
+            finalize_pending(&mut simfile, pending.take())?;
+            pending = Some(PendingChart {
+                chart: SmChart::default(),
+                raw_notes: None,
+            });
             continue;
         }
         if tag == "NOTES" || tag == "NOTES2" {
-            if let Some(mut open) = chart.take() {
-                let lanes = resolve_lanes(&open.steps_type)?;
-                open.notes = parse_note_data(&value, lanes)?;
-                simfile.charts.push(open);
+            if let Some(ref mut open) = pending
+                && params.len() < 7
+            {
+                open.raw_notes = Some(value);
             } else if params.len() >= 7 {
+                finalize_pending(&mut simfile, pending.take())?;
                 let mut block = SmChart {
                     steps_type: params[1].trim().to_string(),
                     description: params[2].trim().to_string(),
@@ -91,12 +114,13 @@ pub fn parse_sm(text: &str) -> Result<SmFile> {
             continue;
         }
 
-        match chart {
+        match pending {
             None => song_tag(&mut simfile, &tag, &value)?,
-            Some(ref mut open) => chart_tag(&simfile, open, &tag, &value)?,
+            Some(ref mut open) => chart_tag(&simfile, &mut open.chart, &tag, &value)?,
         }
     }
 
+    finalize_pending(&mut simfile, pending.take())?;
     if simfile.charts.is_empty() {
         return Err(UrcError::new("syntax", 1, "no chart in simfile"));
     }
@@ -123,6 +147,9 @@ fn chart_tag(simfile: &SmFile, chart: &mut SmChart, tag: &str, value: &str) -> R
         "CREDIT" => chart.credit = value.to_string(),
         "OFFSET" | "BPMS" | "STOPS" | "FREEZES" | "DELAYS" | "WARPS" | "SCROLLS" | "FAKES"
         | "TIMESIGNATURES" => {
+            if value.trim().is_empty() {
+                return Ok(());
+            }
             let timing = chart.timing.get_or_insert_with(|| Timing {
                 offset: simfile.timing.offset,
                 ..Default::default()
@@ -136,10 +163,18 @@ fn chart_tag(simfile: &SmFile, chart: &mut SmChart, tag: &str, value: &str) -> R
 
 fn timing_tag(timing: &mut Timing, tag: &str, value: &str) -> Result<()> {
     match tag {
-        "OFFSET" => timing.offset = parse_float(value)?,
+        "OFFSET" => {
+            timing.offset = if value.trim().is_empty() {
+                0.0
+            } else {
+                parse_float(value)?
+            };
+        }
         "BPMS" => timing.bpms.extend(pairs(value, true)?),
         "STOPS" | "FREEZES" => timing.stops.extend(pairs(value, true)?),
-        "DELAYS" => timing.delays.extend(pairs(value, true)?),
+        "DELAYS" => timing
+            .delays
+            .extend(pairs(value, false)?.into_iter().filter(|entry| entry.1 > 0.0)),
         "WARPS" => timing.warps.extend(pairs(value, false)?),
         "SCROLLS" => timing.scrolls.extend(pairs(value, false)?),
         "FAKES" => timing

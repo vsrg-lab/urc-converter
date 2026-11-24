@@ -58,11 +58,19 @@ function convertChart(file: OjnFile, difficulty: OjnDifficulty): Chart {
 
 		if (event.channel === 0) {
 			fraction = event.value;
-			const approx = fractionMeter(event.value);
-			if (approx !== null && (approx[0] !== meter[0] || approx[1] !== meter[1])) {
-				meter = approx;
-				meterDirty = true;
-				bpmPoints.push([roundMs(time), canonicalBpm(bpm), meter[0], meter[1]]);
+			if (Math.abs(event.value - 1) <= METER_TOLERANCE) {
+				if (meter[0] !== 4 || meter[1] !== 4) {
+					meter = [4, 4];
+					meterDirty = false;
+					bpmPoints.push([roundMs(time), canonicalBpm(bpm), 4, 4]);
+				}
+			} else {
+				const approx = fractionMeter(event.value);
+				if (approx !== null && (approx[0] !== meter[0] || approx[1] !== meter[1])) {
+					meter = approx;
+					meterDirty = true;
+					bpmPoints.push([roundMs(time), canonicalBpm(bpm), meter[0], meter[1]]);
+				}
 			}
 		} else if (event.channel === 1) {
 			bpmPoints.push([roundMs(time), canonicalBpm(event.value), meter[0], meter[1]]);
@@ -153,8 +161,13 @@ function addNote(
  * tie-breaking, so every language agrees.
  */
 function canonicalBpm(value: number): number {
+	if (!Number.isFinite(value) || value >= 1e15)
+		return value;
 	for (let precision = 0; precision < SCALES.length; precision++) {
-		const base = Math.trunc(value * SCALES[precision]);
+		const scaled = value * SCALES[precision];
+		if (scaled >= 9e15)
+			break;
+		const base = Math.trunc(scaled);
 		for (const candidate of [base, base + 1, base - 1]) {
 			const text = decimal(candidate, precision);
 			if (Math.fround(Number(text)) === value)

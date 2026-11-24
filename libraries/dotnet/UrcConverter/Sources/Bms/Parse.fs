@@ -88,7 +88,7 @@ module Parse =
                 let parts =
                     lines[idx]
                         .Trim()
-                        .Split([| ' '; '\t' |], StringSplitOptions.RemoveEmptyEntries)
+                        .Split((null: char[]), StringSplitOptions.RemoveEmptyEntries)
 
                 if
                     parts.Length = 2
@@ -103,25 +103,60 @@ module Parse =
 
         loop 0
 
+    let private isAsciiDigit (c: char) = c >= '0' && c <= '9'
+
     let private isIdChar (c: char) =
         (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+
+    let private normId (token: string) (b: int) =
+        if b = 36 then token.ToUpperInvariant() else token
 
     let private toInt (value: string) (lineNo: int) (name: string) : Result<int, UrcError> =
         match Int32.TryParse(value.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture) with
         | true, v -> Ok v
         | false, _ -> Error(UrcError.syntax lineNo $"invalid {name}: {value}")
 
-    let private toFloat (value: string) (lineNo: int) (name: string) : Result<float, UrcError> =
-        match Double.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture) with
+    let private toInt64 (value: string) (lineNo: int) (name: string) : Result<int64, UrcError> =
+        match Int64.TryParse(value.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture) with
         | true, v -> Ok v
         | false, _ -> Error(UrcError.syntax lineNo $"invalid {name}: {value}")
+
+    let private toFloat (value: string) (lineNo: int) (name: string) : Result<float, UrcError> =
+        match Double.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture) with
+        | true, v when Double.IsFinite v -> Ok v
+        | _ -> Error(UrcError.syntax lineNo $"invalid {name}: {value}")
+
+    let rec private gcd (a: int) (b: int) =
+        if b = 0 then a else gcd b (a % b)
+
+    let private overlay (existing: string list) (incoming: string list) : string list =
+        match existing, incoming with
+        | [], _ -> incoming
+        | _, [] -> existing
+        | _ ->
+            let a = List.toArray existing
+            let b = List.toArray incoming
+            let total = (a.Length / gcd a.Length b.Length) * b.Length
+            let stepA = total / a.Length
+            let stepB = total / b.Length
+            let merged = Array.create total "00"
+
+            for i = 0 to a.Length - 1 do
+                if a[i] <> "00" then
+                    merged[i * stepA] <- a[i]
+
+            for i = 0 to b.Length - 1 do
+                if b[i] <> "00" then
+                    merged[i * stepB] <- b[i]
+
+            Array.toList merged
 
     type private LoopState =
         {
             Chart: BmsChart
             MeasureChunks: Map<int, Map<string, string list list>>
             Frames: (bool * bool) list
-            RandomValue: uint64 option
+            RandomValue: int64 option
             BranchIndex: int
             Rng: uint64 option
         }
@@ -137,8 +172,8 @@ module Parse =
             if channel = "02" then
                 let! rate = toFloat payload lineNo "measure length"
 
-                if rate < 0.0 then
-                    return! Error(UrcError.syntax lineNo $"negative measure length: {payload}")
+                if rate <= 0.0 then
+                    return! Error(UrcError.syntax lineNo $"non-positive measure length: {payload}")
 
                 return
                     { state with
@@ -151,18 +186,26 @@ module Parse =
                 if payload.Length % 2 <> 0 || not (payload |> Seq.forall isIdChar) then
                     return! Error(UrcError.syntax lineNo $"malformed object list: \"{payload}\"")
 
-                let ids = [ for i in 0 .. 2 .. payload.Length - 2 -> payload.Substring(i, 2) ]
+                if payload.Length = 0 then
+                    return state
+                else
+                    let ids =
+                        [
+                            for i in 0 .. 2 .. payload.Length - 2 ->
+                                let sub = payload.Substring(i, 2)
+                                if channel = "03" then sub.ToUpperInvariant() else normId sub state.Chart.Base
+                        ]
 
-                let measureMap =
-                    Map.tryFind measure state.MeasureChunks |> Option.defaultValue Map.empty
+                    let measureMap =
+                        Map.tryFind measure state.MeasureChunks |> Option.defaultValue Map.empty
 
-                let revChunks = Map.tryFind channel measureMap |> Option.defaultValue []
-                let updatedMeasureMap = Map.add channel (ids :: revChunks) measureMap
+                    let revChunks = Map.tryFind channel measureMap |> Option.defaultValue []
+                    let updatedMeasureMap = Map.add channel (ids :: revChunks) measureMap
 
-                return
-                    { state with
-                        MeasureChunks = Map.add measure updatedMeasureMap state.MeasureChunks
-                    }
+                    return
+                        { state with
+                            MeasureChunks = Map.add measure updatedMeasureMap state.MeasureChunks
+                        }
         }
 
     let private processLine
@@ -180,32 +223,34 @@ module Parse =
 
             if
                 head.Length >= 6
-                && Char.IsDigit(head[0])
-                && Char.IsDigit(head[1])
-                && Char.IsDigit(head[2])
+                && isAsciiDigit head[0]
+                && isAsciiDigit head[1]
+                && isAsciiDigit head[2]
+                && isIdChar head[3]
+                && isIdChar head[4]
                 && head[5] = ':'
             then
                 if not (state.Frames |> List.exists fst) then
                     match Int32.TryParse(head.Substring(0, 3), NumberStyles.None, CultureInfo.InvariantCulture) with
                     | true, measure ->
-                        let channel = head.Substring(3, 2)
+                        let channel = head.Substring(3, 2).ToUpperInvariant()
                         let payload = head.Substring(6)
                         addMessage state measure channel payload lineNo
                     | false, _ -> Error(UrcError.syntax lineNo $"invalid measure in header: {head}")
                 else
                     Ok state
             else
-                let spaceIdx = head.IndexOf(' ')
-                let command = if spaceIdx = -1 then head else head.Substring(0, spaceIdx)
-                let argument = if spaceIdx = -1 then "" else head.Substring(spaceIdx + 1).Trim()
+                let sepIdx = head.IndexOfAny([| ' '; '\t' |])
+                let command = if sepIdx = -1 then head else head.Substring(0, sepIdx)
+                let argument = if sepIdx = -1 then "" else head.Substring(sepIdx + 1).Trim()
                 let word = command.ToUpperInvariant()
 
                 result {
                     match word with
                     | "RANDOM" ->
-                        let! count = toInt argument lineNo "#RANDOM"
+                        let! count = toInt64 argument lineNo "#RANDOM"
 
-                        if count < 1 then
+                        if count < 1L then
                             return! Error(UrcError.syntax lineNo $"#RANDOM count must be >= 1: {count}")
 
                         let! pick, nextRng =
@@ -216,13 +261,13 @@ module Parse =
                                 if p < 1UL || p > uint64 count then
                                     Error(UrcError.syntax lineNo $"branch pick out of range: {p}")
                                 else
-                                    Ok(p, state.Rng)
+                                    Ok(int64 p, state.Rng)
                             | _ ->
                                 match state.Rng with
                                 | Some r ->
                                     let v, nextR = JavaRandom.nextInt r (uint64 count)
-                                    Ok(v + 1UL, Some nextR)
-                                | None -> Ok(1UL, None)
+                                    Ok(int64 (v + 1UL), Some nextR)
+                                | None -> Ok(1L, None)
 
                         return
                             { state with
@@ -235,21 +280,24 @@ module Parse =
                             state.RandomValue
                             |> Result.requireSome (UrcError.syntax lineNo "unmatched #IF")
 
-                        let! cond = toInt argument lineNo "#IF"
-                        let frames = (v <> uint64 cond, v = uint64 cond) :: state.Frames
+                        let! cond = toInt64 argument lineNo "#IF"
+                        let frames = (v <> cond, v = cond) :: state.Frames
                         return { state with Frames = frames }
                     | "ELSEIF" ->
                         match state.Frames with
                         | [] -> return! Error(UrcError.syntax lineNo "unmatched #ELSEIF")
                         | (_, matched) :: rest ->
-                            let! cond = toInt argument lineNo "#ELSEIF"
+                            let! cond = toInt64 argument lineNo "#ELSEIF"
 
                             let! v =
                                 state.RandomValue
                                 |> Result.requireSome (UrcError.syntax lineNo "unmatched #ELSEIF")
 
-                            let nowMatched = matched || v = uint64 cond
-                            return { state with Frames = (not nowMatched, nowMatched) :: rest }
+                            if matched then
+                                return { state with Frames = (true, true) :: rest }
+                            else
+                                let now = v = cond
+                                return { state with Frames = (not now, now) :: rest }
                     | "ELSE" ->
                         match state.Frames with
                         | [] -> return! Error(UrcError.syntax lineNo "unmatched #ELSE")
@@ -273,36 +321,34 @@ module Parse =
                         return { state with Chart = { state.Chart with Bpm = Some bpm } }
                     | _ when
                         (command.Length = 5 && command.StartsWith("BPM", StringComparison.OrdinalIgnoreCase))
-                        || (command.Length = 8 && command.StartsWith("EXBPM", StringComparison.OrdinalIgnoreCase))
+                        || (command.Length = 7 && command.StartsWith("EXBPM", StringComparison.OrdinalIgnoreCase))
                         ->
                         let! bpm = toFloat argument lineNo command
+                        let id = normId (command.Substring(command.Length - 2)) state.Chart.Base
 
                         let chart =
                             { state.Chart with
-                                BpmDefs = Map.add (command.Substring(command.Length - 2)) bpm state.Chart.BpmDefs
+                                BpmDefs = Map.add id bpm state.Chart.BpmDefs
                             }
 
                         return { state with Chart = chart }
                     | _ when command.Length = 6 && command.StartsWith("STOP", StringComparison.OrdinalIgnoreCase) ->
                         let! stop = toFloat argument lineNo command
+                        let id = normId (command.Substring(command.Length - 2)) state.Chart.Base
 
                         let chart =
                             { state.Chart with
-                                StopDefs =
-                                    Map.add
-                                        (command.Substring(command.Length - 2))
-                                        (abs stop / 192.0)
-                                        state.Chart.StopDefs
+                                StopDefs = Map.add id (abs stop / 192.0) state.Chart.StopDefs
                             }
 
                         return { state with Chart = chart }
                     | _ when command.Length = 8 && command.StartsWith("SCROLL", StringComparison.OrdinalIgnoreCase) ->
                         let! scroll = toFloat argument lineNo command
+                        let id = normId (command.Substring(command.Length - 2)) state.Chart.Base
 
                         let chart =
                             { state.Chart with
-                                ScrollDefs =
-                                    Map.add (command.Substring(command.Length - 2)) scroll state.Chart.ScrollDefs
+                                ScrollDefs = Map.add id scroll state.Chart.ScrollDefs
                             }
 
                         return { state with Chart = chart }
@@ -314,7 +360,12 @@ module Parse =
 
                         return { state with Chart = { state.Chart with LnType = lntype } }
                     | "LNOBJ" ->
-                        let lnObj = if String.IsNullOrEmpty argument then None else Some argument
+                        let lnObj =
+                            if String.IsNullOrEmpty argument then
+                                None
+                            else
+                                Some(normId argument state.Chart.Base)
+
                         return { state with Chart = { state.Chart with LnObj = lnObj } }
                     | "TITLE" ->
                         let title = if String.IsNullOrEmpty argument then None else Some argument
@@ -380,7 +431,8 @@ module Parse =
             let measures =
                 doneState.MeasureChunks
                 |> Map.map (fun _ channelMap ->
-                    channelMap |> Map.map (fun _ revChunks -> revChunks |> List.rev |> List.concat))
+                    channelMap
+                    |> Map.map (fun _ revChunks -> revChunks |> List.rev |> List.fold overlay []))
 
             return { doneState.Chart with Measures = measures }
         }

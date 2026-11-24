@@ -40,6 +40,48 @@ class JavaRandom {
 	}
 }
 
+function normId(token: string, base: number): string {
+	return base === 36 ? token.toUpperCase() : token;
+}
+
+function splitCommand(head: string): [string, string] {
+	for (let i = 0; i < head.length; i++)
+		if (head[i] === " " || head[i] === "\t")
+			return [head.slice(0, i), head.slice(i + 1)];
+	return [head, ""];
+}
+
+function gcd(a: number, b: number): number {
+	let x = a;
+	let y = b;
+	while (y !== 0) {
+		const tmp = x % y;
+		x = y;
+		y = tmp;
+	}
+	return x;
+}
+
+function overlay(existing: string[], incoming: string[]): string[] {
+	if (existing.length === 0)
+		return [...incoming];
+	if (incoming.length === 0)
+		return existing;
+	const lenA = existing.length;
+	const lenB = incoming.length;
+	const total = (lenA / gcd(lenA, lenB)) * lenB;
+	const stepA = total / lenA;
+	const stepB = total / lenB;
+	const merged = new Array<string>(total).fill("00");
+	for (let idx = 0; idx < lenA; idx++)
+		if (existing[idx] !== "00")
+			merged[idx * stepA] = existing[idx];
+	for (let idx = 0; idx < lenB; idx++)
+		if (incoming[idx] !== "00")
+			merged[idx * stepB] = incoming[idx];
+	return merged;
+}
+
 /**
  * Parses BMS-family bytes into a source model.
  */
@@ -79,19 +121,20 @@ export function parseBms(data: Uint8Array, options?: BmsParseOptions): BmsChart 
 			continue;
 		const head = line.slice(1);
 
-		if (head.length >= 6 && /^\d{3}/.test(head) && head[5] === ":") {
+		if (
+			head.length >= 6 &&
+			/^[0-9]{3}[0-9A-Za-z]{2}:/.test(head)
+		) {
 			if (!frames.some(frame => frame[0])) {
 				const measure = Number.parseInt(head.slice(0, 3), 10);
-				const channel = head.slice(3, 5);
+				const channel = head.slice(3, 5).toUpperCase();
 				const payload = head.slice(6);
 				addMessage(chart, measure, channel, payload, lineNo);
 			}
 			continue;
 		}
 
-		const spaceIndex = head.indexOf(" ");
-		const command = spaceIndex === -1 ? head : head.slice(0, spaceIndex);
-		const argument = spaceIndex === -1 ? "" : head.slice(spaceIndex + 1);
+		const [command, argument] = splitCommand(head);
 		const word = command.toUpperCase();
 
 		if (word === "RANDOM") {
@@ -113,13 +156,18 @@ export function parseBms(data: Uint8Array, options?: BmsParseOptions): BmsChart 
 			if (randomValue === null)
 				throw new UrcError("syntax", lineNo, "unmatched #IF");
 			const condition = toInt(argument, lineNo, "#IF");
-			frames.push([randomValue !== condition, randomValue === condition]);
+			const matched = randomValue === condition;
+			frames.push([!matched, matched]);
 		} else if (word === "ELSEIF") {
 			if (frames.length === 0)
 				throw new UrcError("syntax", lineNo, "unmatched #ELSEIF");
 			const condition = toInt(argument, lineNo, "#ELSEIF");
-			const matched = frames[frames.length - 1][1] || randomValue === condition;
-			frames[frames.length - 1] = [!matched, matched];
+			if (frames[frames.length - 1][1])
+				frames[frames.length - 1] = [true, true];
+			else {
+				const now = randomValue === condition;
+				frames[frames.length - 1] = [!now, now];
+			}
 		} else if (word === "ELSE") {
 			if (frames.length === 0)
 				throw new UrcError("syntax", lineNo, "unmatched #ELSE");
@@ -144,21 +192,22 @@ export function parseBms(data: Uint8Array, options?: BmsParseOptions): BmsChart 
 		else if (word === "BPM")
 			chart.bpm = toFloat(argument, lineNo, "#BPM");
 		else if (
-			(command.length === 5 && command.slice(0, 3).toUpperCase() === "BPM") ||
-			(command.length === 8 && command.slice(0, 6).toUpperCase() === "EXBPM")
+			(command.length === 5 && word.startsWith("BPM")) ||
+			(command.length === 7 && word.startsWith("EXBPM"))
 		)
-			chart.bpmDefs.set(command.slice(-2), toFloat(argument, lineNo, command));
-		else if (command.length === 6 && command.slice(0, 4).toUpperCase() === "STOP")
-			chart.stopDefs.set(command.slice(-2), Math.abs(toFloat(argument, lineNo, command)) / 192.0);
-		else if (command.length === 8 && command.slice(0, 6).toUpperCase() === "SCROLL")
-			chart.scrollDefs.set(command.slice(-2), toFloat(argument, lineNo, command));
+			chart.bpmDefs.set(normId(command.slice(-2), base), toFloat(argument, lineNo, command));
+		else if (command.length === 6 && word.startsWith("STOP"))
+			chart.stopDefs.set(normId(command.slice(-2), base), Math.abs(toFloat(argument, lineNo, command)) / 192.0);
+		else if (command.length === 8 && word.startsWith("SCROLL"))
+			chart.scrollDefs.set(normId(command.slice(-2), base), toFloat(argument, lineNo, command));
 		else if (word === "LNTYPE") {
 			chart.lntype = toInt(argument, lineNo, "#LNTYPE");
 			if (chart.lntype !== 1 && chart.lntype !== 2)
 				throw new UrcError("syntax", lineNo, `unsupported #LNTYPE: ${chart.lntype}`);
-		} else if (word === "LNOBJ")
-			chart.lnobj = argument.trim() || null;
-		else if (word === "TITLE")
+		} else if (word === "LNOBJ") {
+			const rawLnobj = argument.trim();
+			chart.lnobj = rawLnobj ? normId(rawLnobj, base) : null;
+		} else if (word === "TITLE")
 			chart.title = argument.trim() || null;
 		else if (word === "ARTIST")
 			chart.artist = argument.trim() || null;
@@ -191,9 +240,7 @@ function decode(data: Uint8Array): string {
 }
 
 function splitLines(text: string): string[] {
-	let clean = text;
-	if (clean.startsWith("\ufeff"))
-		clean = clean.slice(1);
+	const clean = text.replace(/^\uFEFF+/, "");
 	return clean.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
 }
 
@@ -201,9 +248,9 @@ function scanBase(text: string): number {
 	for (const raw of splitLines(text)) {
 		const parts = raw.trim().split(/\s+/);
 		if (parts.length === 2 && parts[0].toUpperCase() === "#BASE") {
-			const base = Number.parseInt(parts[1], 10);
-			if (Number.isNaN(base))
+			if (!/^[+-]?\d+$/.test(parts[1]))
 				throw new UrcError("syntax", 1, `invalid #BASE: ${parts[1]}`);
+			const base = Number.parseInt(parts[1], 10);
 			if (base !== 36 && base !== 62)
 				throw new UrcError("syntax", 1, `unsupported #BASE: ${base}`);
 			return base;
@@ -228,8 +275,10 @@ function toInt(value: string, lineNo: number, name: string): number {
 
 function toFloat(value: string, lineNo: number, name: string): number {
 	const trimmed = value.trim();
-	const num = Number.parseFloat(trimmed);
-	if (Number.isNaN(num))
+	if (trimmed === "")
+		throw new UrcError("syntax", lineNo, `invalid ${name}: ${value}`);
+	const num = Number(trimmed);
+	if (!Number.isFinite(num))
 		throw new UrcError("syntax", lineNo, `invalid ${name}: ${value}`);
 	return num;
 }
@@ -237,27 +286,27 @@ function toFloat(value: string, lineNo: number, name: string): number {
 function addMessage(chart: BmsChart, measure: number, channel: string, payload: string, lineNo: number): void {
 	if (channel === "02") {
 		const rate = toFloat(payload, lineNo, "measure length");
-		if (rate < 0)
-			throw new UrcError("syntax", lineNo, `negative measure length: ${payload}`);
+		if (rate <= 0)
+			throw new UrcError("syntax", lineNo, `non-positive measure length: ${payload}`);
 		chart.rates.set(measure, rate);
 		return;
 	}
 	if (payload.length % 2 !== 0 || ![...payload].every(isIdChar))
 		throw new UrcError("syntax", lineNo, `malformed object list: "${payload}"`);
+	if (payload.length === 0)
+		return;
 
 	const ids: string[] = [];
-	for (let i = 0; i < payload.length; i += 2)
-		ids.push(payload.slice(i, i + 2));
+	for (let i = 0; i < payload.length; i += 2) {
+		const raw = payload.slice(i, i + 2);
+		ids.push(channel === "03" ? raw.toUpperCase() : normId(raw, chart.base));
+	}
 
 	let measureMap = chart.measures.get(measure);
 	if (!measureMap) {
 		measureMap = new Map();
 		chart.measures.set(measure, measureMap);
 	}
-	let channelList = measureMap.get(channel);
-	if (!channelList) {
-		channelList = [];
-		measureMap.set(channel, channelList);
-	}
-	channelList.push(...ids);
+	const existing = measureMap.get(channel);
+	measureMap.set(channel, existing ? overlay(existing, ids) : ids);
 }

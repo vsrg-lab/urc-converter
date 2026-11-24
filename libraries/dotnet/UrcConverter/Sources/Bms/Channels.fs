@@ -24,14 +24,6 @@ module internal Channels =
 
     let systemChannels = Set.ofList [ "02"; "03"; "08"; "09"; "SC" ]
 
-    let idValue (text: string) (b: int) =
-        let digit (c: char) =
-            if c >= '0' && c <= '9' then int c - int '0'
-            elif c >= 'A' && c <= 'Z' then int c - int 'A' + 10
-            else int c - int 'a' + 36
-
-        (digit text[0]) * b + (digit text[1])
-
     let channelKind (channel: string) : ChannelKind option =
         if channel.Length <> 2 then
             None
@@ -181,6 +173,7 @@ module internal Channels =
                     match emitHold lane p time notes with
                     | Ok updated -> loop None updated tail
                     | Error err -> Error err
+                | Some marker, None when obj = marker -> loop None notes tail
                 | _ ->
                     let acc =
                         match pending with
@@ -201,8 +194,14 @@ module internal Channels =
             objects
             |> List.indexed
             |> List.groupBy (fun (_, (_, channel, _)) -> channel)
+            |> List.sortBy fst
             |> List.map (fun (channel, group) ->
-                channel, group |> List.map (fun (idx, (_, _, obj)) -> Map.find idx timed, obj))
+                let sortedStream =
+                    group
+                    |> List.sortBy (fun (_, (y, _, _)) -> y)
+                    |> List.map (fun (idx, (_, _, obj)) -> Map.find idx timed, obj)
+
+                channel, sortedStream)
 
         let channelNotes (channel, stream) : Result<(int * int * NoteType) list, UrcError> =
             match getLane mode channel, channelKind channel with

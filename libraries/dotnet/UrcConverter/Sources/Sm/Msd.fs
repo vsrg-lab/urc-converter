@@ -9,8 +9,8 @@ module internal Msd =
 
     let parseFloat (token: string) : Result<float, UrcError> =
         match Double.TryParse(token.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture) with
-        | true, value -> Ok value
-        | false, _ -> Error(UrcError.syntax 1 $"invalid number: {token}")
+        | true, value when Double.IsFinite value -> Ok value
+        | _ -> Error(UrcError.syntax 1 $"invalid number: {token}")
 
     let parseBeat (token: string) : Result<float, UrcError> =
         let trimmed = token.TrimEnd()
@@ -69,7 +69,7 @@ module internal Msd =
         let n = text.Length
 
         let rec skipComment (i: int) =
-            if i < n && text[i] <> '\n' then skipComment (i + 1) else i
+            if i < n && text[i] <> '\n' && text[i] <> '\r' then skipComment (i + 1) else i
 
         let rec loop
             (i: int)
@@ -80,7 +80,11 @@ module internal Msd =
             (revValues: string list list)
             : string list list =
             if i >= n then
-                List.rev revValues
+                if reading then
+                    let completed = List.rev (charsToString revCurrent :: revParams)
+                    List.rev (completed :: revValues)
+                else
+                    List.rev revValues
             elif i + 1 < n && text[i] = '/' && text[i + 1] = '/' then
                 loop (skipComment i) reading revCurrent revLine revParams revValues
             elif reading && text[i] = '#' then

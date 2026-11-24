@@ -74,6 +74,18 @@ export function resolveLanes(stepsType: string): number {
 	return lanes;
 }
 
+interface PendingChart {
+	chart: SmChart;
+	rawNotes: string | null;
+}
+
+function finalizePending(simfile: SmFile, pending: PendingChart | null): void {
+	if (pending === null || pending.rawNotes === null)
+		return;
+	pending.chart.notes = parseNoteData(pending.rawNotes, resolveLanes(pending.chart.stepsType));
+	simfile.charts.push(pending.chart);
+}
+
 /**
  * Parses a .sm or .ssc simfile into its source model.
  */
@@ -86,22 +98,23 @@ export function parseSm(text: string): SmFile {
 		timing: emptyTiming(),
 		charts: []
 	};
-	let chart: SmChart | null = null;
+	let pending: PendingChart | null = null;
 
 	for (const params of tokenize(text)) {
 		const tag = params[0].toUpperCase();
 		const value = params.length > 1 ? params[1] : "";
 
 		if (tag === "NOTEDATA") {
-			chart = emptyChart();
+			finalizePending(simfile, pending);
+			pending = { chart: emptyChart(), rawNotes: null };
 			continue;
 		}
 		if (tag === "NOTES" || tag === "NOTES2") {
-			if (chart !== null) {
-				chart.notes = parseNoteData(value, resolveLanes(chart.stepsType));
-				simfile.charts.push(chart);
-				chart = null;
-			} else if (params.length >= 7) {
+			if (pending !== null && params.length < 7)
+				pending.rawNotes = value;
+			else if (params.length >= 7) {
+				finalizePending(simfile, pending);
+				pending = null;
 				const block = emptyChart();
 				block.stepsType = params[1].trim();
 				block.description = params[2].trim();
@@ -113,12 +126,13 @@ export function parseSm(text: string): SmFile {
 			continue;
 		}
 
-		if (chart === null)
+		if (pending === null)
 			songTag(simfile, tag, value);
 		else
-			chartTag(simfile, chart, tag, value);
+			chartTag(simfile, pending.chart, tag, value);
 	}
 
+	finalizePending(simfile, pending);
 	if (simfile.charts.length === 0)
 		throw new UrcError("syntax", 1, "no chart in simfile");
 	return simfile;
@@ -187,6 +201,8 @@ function chartTag(simfile: SmFile, chart: SmChart, tag: string, value: string): 
 			break;
 		default:
 			if (TIMING_TAGS.has(tag)) {
+				if (value.trim() === "")
+					return;
 				if (chart.timing === null)
 					chart.timing = { ...emptyTiming(), offset: simfile.timing.offset };
 				timingTag(chart.timing, tag, value);
@@ -197,7 +213,7 @@ function chartTag(simfile: SmFile, chart: SmChart, tag: string, value: string): 
 function timingTag(timing: Timing, tag: string, value: string): void {
 	switch (tag) {
 		case "OFFSET":
-			timing.offset = parseFloatStrict(value);
+			timing.offset = value.trim() === "" ? 0 : parseFloatStrict(value);
 			break;
 		case "BPMS":
 			timing.bpms.push(...pairs(value, true));
@@ -207,7 +223,9 @@ function timingTag(timing: Timing, tag: string, value: string): void {
 			timing.stops.push(...pairs(value, true));
 			break;
 		case "DELAYS":
-			timing.delays.push(...pairs(value, true));
+			for (const entry of pairs(value))
+				if (entry[1] > 0)
+					timing.delays.push(entry);
 			break;
 		case "WARPS":
 			timing.warps.push(...pairs(value));

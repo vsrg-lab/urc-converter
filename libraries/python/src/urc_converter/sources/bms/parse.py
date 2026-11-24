@@ -1,5 +1,7 @@
 """Parser for BMS-family bytes."""
 
+import math
+
 from ...error import UrcError
 from .model import BmsChart
 
@@ -40,6 +42,17 @@ def parse_bms(
 	return _parse(text, _scan_base(text), pms, seed, branches)
 
 
+def _norm_id(token: str, base: int) -> str:
+	return token.upper() if base == 36 else token
+
+
+def _split_command(head: str) -> tuple[str, str]:
+	for idx, ch in enumerate(head):
+		if ch in (" ", "\t"):
+			return head[:idx], head[idx + 1 :]
+	return head, ""
+
+
 def _parse(
 	text: str,
 	base: int,
@@ -59,12 +72,18 @@ def _parse(
 			continue
 		head = line[1:]
 
-		if len(head) >= 6 and head[:3].isdigit() and head[5] == ":":
+		if (
+			len(head) >= 6
+			and _is_ascii_digits(head[:3])
+			and _is_id_char(head[3])
+			and _is_id_char(head[4])
+			and head[5] == ":"
+		):
 			if not any(frame[0] for frame in frames):
-				_add_message(chart, int(head[:3]), head[3:5], head[6:], line_no)
+				_add_message(chart, int(head[:3]), head[3:5].upper(), head[6:], line_no)
 			continue
 
-		command, _, argument = head.partition(" ")
+		command, argument = _split_command(head)
 		word = command.upper()
 
 		if word == "RANDOM":
@@ -85,13 +104,17 @@ def _parse(
 			if random_value is None:
 				raise UrcError("syntax", line_no, "unmatched #IF")
 			condition = _to_int(argument, line_no, "#IF")
-			frames.append([random_value != condition, random_value == condition])
+			matched = random_value == condition
+			frames.append([not matched, matched])
 		elif word == "ELSEIF":
 			if not frames:
 				raise UrcError("syntax", line_no, "unmatched #ELSEIF")
 			condition = _to_int(argument, line_no, "#ELSEIF")
-			matched = frames[-1][1] or random_value == condition
-			frames[-1] = [not matched, matched]
+			if frames[-1][1]:
+				frames[-1] = [True, True]
+			else:
+				now = random_value == condition
+				frames[-1] = [not now, now]
 		elif word == "ELSE":
 			if not frames:
 				raise UrcError("syntax", line_no, "unmatched #ELSE")
@@ -115,20 +138,23 @@ def _parse(
 			continue
 		elif word == "BPM":
 			chart.bpm = _to_float(argument, line_no, "#BPM")
-		elif (len(command) == 5 and command[:3].upper() == "BPM") or (
-			len(command) == 8 and command[:6].upper() == "EXBPM"
+		elif (len(command) == 5 and word.startswith("BPM")) or (
+			len(command) == 7 and word.startswith("EXBPM")
 		):
-			chart.bpm_defs[command[-2:]] = _to_float(argument, line_no, command)
-		elif len(command) == 6 and command[:4].upper() == "STOP":
-			chart.stop_defs[command[-2:]] = abs(_to_float(argument, line_no, command)) / 192.0
-		elif len(command) == 8 and command[:6].upper() == "SCROLL":
-			chart.scroll_defs[command[-2:]] = _to_float(argument, line_no, command)
+			chart.bpm_defs[_norm_id(command[-2:], base)] = _to_float(argument, line_no, command)
+		elif len(command) == 6 and word.startswith("STOP"):
+			chart.stop_defs[_norm_id(command[-2:], base)] = (
+				abs(_to_float(argument, line_no, command)) / 192.0
+			)
+		elif len(command) == 8 and word.startswith("SCROLL"):
+			chart.scroll_defs[_norm_id(command[-2:], base)] = _to_float(argument, line_no, command)
 		elif word == "LNTYPE":
 			chart.lntype = _to_int(argument, line_no, "#LNTYPE")
 			if chart.lntype not in (1, 2):
 				raise UrcError("syntax", line_no, f"unsupported #LNTYPE: {chart.lntype}")
 		elif word == "LNOBJ":
-			chart.lnobj = argument.strip() or None
+			raw_lnobj = argument.strip()
+			chart.lnobj = _norm_id(raw_lnobj, base) if raw_lnobj else None
 		elif word == "TITLE":
 			chart.title = argument.strip() or None
 		elif word == "ARTIST":
@@ -141,19 +167,50 @@ def _parse(
 	return chart
 
 
+def _overlay(existing: list[str], incoming: list[str]) -> list[str]:
+	if not existing:
+		return list(incoming)
+	if not incoming:
+		return existing
+	len_a = len(existing)
+	len_b = len(incoming)
+	total = math.lcm(len_a, len_b)
+	step_a = total // len_a
+	step_b = total // len_b
+	merged = ["00"] * total
+	for idx, obj in enumerate(existing):
+		if obj != "00":
+			merged[idx * step_a] = obj
+	for idx, obj in enumerate(incoming):
+		if obj != "00":
+			merged[idx * step_b] = obj
+	return merged
+
+
 def _add_message(
 	chart: BmsChart, measure: int, channel: str, payload: str, line_no: int
 ) -> None:
 	if channel == "02":
 		rate = _to_float(payload, line_no, "measure length")
-		if rate < 0:
-			raise UrcError("syntax", line_no, f"negative measure length: {payload}")
+		if rate <= 0:
+			raise UrcError("syntax", line_no, f"non-positive measure length: {payload}")
 		chart.rates[measure] = rate
 		return
 	if len(payload) % 2 != 0 or not all(_is_id_char(char) for char in payload):
 		raise UrcError("syntax", line_no, f"malformed object list: {payload!r}")
-	ids = [payload[index : index + 2] for index in range(0, len(payload), 2)]
-	chart.measures.setdefault(measure, {}).setdefault(channel, []).extend(ids)
+	if not payload:
+		return
+	ids = [
+		_norm_id(payload[index : index + 2], chart.base)
+		if channel != "03"
+		else payload[index : index + 2].upper()
+		for index in range(0, len(payload), 2)
+	]
+	measure_map = chart.measures.setdefault(measure, {})
+	if channel in measure_map:
+		measure_map[channel] = _overlay(measure_map[channel], ids)
+	else:
+		measure_map[channel] = ids
 
 
 def _decode(data: bytes) -> str:
@@ -182,9 +239,12 @@ def _scan_base(text: str) -> int:
 
 
 def _lines(text: str) -> list[str]:
-	if text.startswith("﻿"):
-		text = text[1:]
+	text = text.lstrip("\ufeff")
 	return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
+def _is_ascii_digits(text: str) -> bool:
+	return all("0" <= char <= "9" for char in text)
 
 
 def _is_id_char(char: str) -> bool:
@@ -200,6 +260,9 @@ def _to_int(value: str, line_no: int, name: str) -> int:
 
 def _to_float(value: str, line_no: int, name: str) -> float:
 	try:
-		return float(value.strip())
+		parsed = float(value.strip())
 	except ValueError:
 		raise UrcError("syntax", line_no, f"invalid {name}: {value!r}") from None
+	if not math.isfinite(parsed):
+		raise UrcError("syntax", line_no, f"invalid {name}: {value!r}")
+	return parsed

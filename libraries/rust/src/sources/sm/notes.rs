@@ -23,9 +23,10 @@ pub(crate) fn parse_note_data(data: &str, lanes: u32) -> Result<Vec<SmNote>> {
         if part.is_empty() {
             continue;
         }
-        let content: Vec<&str> = part
+        let normalized = part.replace("\r\n", "\n").replace('\r', "\n");
+        let content: Vec<&str> = normalized
             .split('\n')
-            .map(|raw| raw.trim_matches([' ', '\t', '\r']))
+            .map(|raw| raw.trim_matches([' ', '\t']))
             .filter(|line| !line.is_empty())
             .collect();
         let total = content.len() as f64;
@@ -86,8 +87,9 @@ pub(crate) fn parse_note_data(data: &str, lanes: u32) -> Result<Vec<SmNote>> {
                     }),
                     _ => {}
                 }
-                if position < chars.len() && chars[position] == '[' {
-                    match chars[position..].iter().position(|&c| c == ']') {
+                while position < chars.len() && matches!(chars[position], '[' | '{') {
+                    let close = if chars[position] == '[' { ']' } else { '}' };
+                    match chars[position..].iter().position(|&c| c == close) {
                         Some(end) => position += end + 1,
                         None => position = chars.len(),
                     }

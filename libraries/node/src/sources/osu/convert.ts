@@ -2,7 +2,7 @@
  * Mapper from the osu!mania source model onto a URC chart.
  */
 import { UrcError } from "../../error.js";
-import type { Chart, Note } from "../../model.js";
+import type { Chart, Note, NoteType } from "../../model.js";
 import { ZERO_LENGTH_HOLD } from "../../strings.js";
 import { buildTiming, checkHoldOverlap, firstDownbeatAfter } from "../shared.js";
 import type { OsuBeatmap } from "./model.js";
@@ -10,6 +10,7 @@ import type { OsuBeatmap } from "./model.js";
 const JUDGMENT_RATES = [100, 100, 66.67, 33.33, 16.67, 0];
 const KEY_MIN = 1;
 const KEY_MAX = 18;
+const TYPE_ORDER: Record<NoteType, number> = { N: 0, LS: 1, LE: 2, M: 3, F: 4 };
 
 /**
  * Maps an osu!mania beatmap onto a URC chart.
@@ -21,15 +22,12 @@ export function convertOsu(beatmap: OsuBeatmap): Chart {
 	if (beatmap.circleSize === null)
 		throw new UrcError("syntax", 1, "missing CircleSize");
 
-	if (beatmap.circleSize !== Math.trunc(beatmap.circleSize))
+	if (!Number.isFinite(beatmap.circleSize) || beatmap.circleSize !== Math.trunc(beatmap.circleSize))
 		throw new UrcError("syntax", 1, `CircleSize must be an integer: ${beatmap.circleSize}`);
 
 	const keys = Math.trunc(beatmap.circleSize);
 	if (keys < KEY_MIN || keys > KEY_MAX)
 		throw new UrcError("syntax", 1, `CircleSize out of range: ${keys}`);
-
-	if (beatmap.timingPoints.some(point => point.beatLength === 0))
-		throw new UrcError("syntax", 1, "timing point with zero beat length");
 
 	let firstNoteTime = 0;
 	if (beatmap.hitObjects.length > 0) {
@@ -39,24 +37,13 @@ export function convertOsu(beatmap: OsuBeatmap): Chart {
 				firstNoteTime = beatmap.hitObjects[i].time;
 	}
 
-	const bpmPoints: Array<[number, number, number, number]> = beatmap.timingPoints
-		.filter(point => point.uninherited)
-		.map(point => [
-			point.time,
-			60000 / point.beatLength,
-			point.meter,
-			4
-		]);
-
+	const { bpmPoints, svPoints, anchorPoints } = resolveTiming(beatmap);
 	const timing = buildTiming(
 		bpmPoints,
-		beatmap.timingPoints.filter(point => !point.uninherited).map(point => [
-			point.time,
-			-100 / point.beatLength
-		]),
+		svPoints,
 		firstNoteTime,
 		".osu",
-		firstDownbeatAfter(bpmPoints, firstNoteTime)
+		firstDownbeatAfter(anchorPoints, firstNoteTime)
 	);
 
 	const notes: Note[] = [];
@@ -82,18 +69,21 @@ export function convertOsu(beatmap: OsuBeatmap): Chart {
 			notes.push({ timestampMs: obj.endTime - firstNoteTime, lane, type: "LE" });
 		} else
 			notes.push({ timestampMs: obj.time - firstNoteTime, lane, type: "N" });
-
 	}
 
+	notes.sort(
+		(a, b) => a.timestampMs - b.timestampMs || a.lane - b.lane || TYPE_ORDER[a.type] - TYPE_ORDER[b.type]
+	);
 	checkHoldOverlap(notes);
 
 	const od = beatmap.overallDifficulty;
-	const judgment = od === null
-		? null
-		: {
-			windows: [16.5, ...[64, 97, 127, 151, 188].map(base => base - 3 * od + 0.5)],
-			rates: [...JUDGMENT_RATES]
-		};
+	let judgment = null;
+	if (od !== null) {
+		const windows = [16.5];
+		for (const base of [64, 97, 127, 151, 188])
+			windows.push(Math.max(windows[windows.length - 1], base - 3 * od + 0.5));
+		judgment = { windows, rates: [...JUDGMENT_RATES] };
+	}
 
 	const title = beatmap.titleUnicode || beatmap.title;
 	const artist = beatmap.artistUnicode || beatmap.artist;
@@ -122,4 +112,60 @@ export function convertOsu(beatmap: OsuBeatmap): Chart {
 		timing,
 		notes
 	};
+}
+
+function resolveTiming(beatmap: OsuBeatmap): {
+	bpmPoints: Array<[number, number, number, number]>;
+	svPoints: Array<[number, number]>;
+	anchorPoints: Array<[number, number, number, number]>;
+} {
+	const tpByTime = new Map<number, [number, number]>();
+	const svByTime = new Map<number, number>();
+
+	for (const point of beatmap.timingPoints) {
+		if (!Number.isFinite(point.beatLength) || point.beatLength === 0)
+			throw new UrcError("syntax", 1, "timing point with zero beat length");
+		const isSv = !point.uninherited || point.beatLength < 0;
+		if (isSv) {
+			if (point.beatLength > 0)
+				throw new UrcError("syntax", 1, "inherited timing point with positive beat length");
+			svByTime.set(point.time, -100 / point.beatLength);
+		} else {
+			const meter = point.meter > 0 ? point.meter : 4;
+			tpByTime.set(point.time, [60000 / point.beatLength, meter]);
+		}
+	}
+
+	if (tpByTime.size === 0)
+		throw new UrcError("syntax", 1, ".osu: no BPM timing point");
+
+	const allTimes = [...new Set([...tpByTime.keys(), ...svByTime.keys()])].sort((a, b) => a - b);
+	const bpmPoints: Array<[number, number, number, number]> = [];
+	const svPoints: Array<[number, number]> = [];
+	const anchorPoints: Array<[number, number, number, number]> = [...tpByTime.entries()]
+		.sort((a, b) => a[0] - b[0])
+		.map(([time, [bpm, meter]]) => [time, bpm, meter, 4]);
+
+	let currentBpm: number | null = null;
+	let currentMeter = 4;
+	let currentSv = 1;
+
+	for (const time of allTimes) {
+		const tp = tpByTime.get(time);
+		if (svByTime.has(time))
+			currentSv = svByTime.get(time) as number;
+		else if (tp !== undefined)
+			currentSv = 1;
+
+		if (tp !== undefined)
+			[currentBpm, currentMeter] = tp;
+
+		if (currentBpm === null)
+			continue;
+
+		bpmPoints.push([time, currentBpm, currentMeter, 4]);
+		svPoints.push([time, currentSv]);
+	}
+
+	return { bpmPoints, svPoints, anchorPoints };
 }

@@ -60,13 +60,15 @@ module internal Notes =
         }
 
     let parseNoteData (data: string) (lanes: int) : Result<SmNote list, UrcError> =
-        let skipKeysound (chars: char[]) (position: int) =
-            if position < chars.Length && chars[position] = '[' then
-                let rec findBracket (i: int) =
-                    if i >= chars.Length || chars[i] = ']' then i else findBracket (i + 1)
+        let rec skipAttachments (chars: char[]) (position: int) =
+            if position < chars.Length && (chars[position] = '[' || chars[position] = '{') then
+                let closeChar = if chars[position] = '[' then ']' else '}'
 
-                let endIdx = findBracket position
-                if endIdx >= chars.Length then chars.Length else endIdx + 1
+                let rec findClose (i: int) =
+                    if i >= chars.Length || chars[i] = closeChar then i else findClose (i + 1)
+
+                let endIdx = findClose position
+                if endIdx >= chars.Length then chars.Length else skipAttachments chars (endIdx + 1)
             else
                 position
 
@@ -81,7 +83,7 @@ module internal Notes =
                 Ok acc
             else
                 let ch = chars[position]
-                let nextPos = skipKeysound chars (position + 1)
+                let nextPos = skipAttachments chars (position + 1)
 
                 let pushSimple kind =
                     let note = { Row = row; Track = track; Kind = kind; TailRow = None }
@@ -130,8 +132,8 @@ module internal Notes =
 
         let processMeasure (measure: int) (part: string) (acc: ParseAcc) : Result<ParseAcc, UrcError> =
             let content =
-                part.Split('\n')
-                |> Array.map (fun raw -> raw.Trim(' ', '\t', '\r'))
+                part.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
+                |> Array.map (fun raw -> raw.Trim(' ', '\t'))
                 |> Array.filter (fun line -> line.Length > 0)
 
             let total = float content.Length
@@ -140,7 +142,7 @@ module internal Notes =
                 if index >= content.Length then
                     Ok lineAcc
                 else
-                    let row = rowsOf ((float measure + float index / total) * 4.0)
+                    let row = int (rowsOf ((float measure + float index / total) * 4.0))
                     let chars = content[index].ToCharArray()
 
                     match processChars row chars 0 0 lineAcc with
@@ -191,7 +193,8 @@ module internal Notes =
                     |> fun sec -> Shared.roundMs (sec * 1000.0)
 
                 let inFake =
-                    fakeRanges |> List.exists (fun (start, end') -> start <= note.Row && note.Row < end')
+                    let noteRow = int64 note.Row
+                    fakeRanges |> List.exists (fun (start, end') -> start <= noteRow && noteRow < end')
 
                 if inFake then
                     loop tail (index + 1) ((headMs, note.Track, NoteType.F) :: acc)

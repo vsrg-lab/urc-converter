@@ -11,7 +11,7 @@ module Parse =
     open UrcConverter.Sources
     open UrcConverter.Sources.Ojn.Model
 
-    let private stringRanges = [ (108, 172); (172, 204); (204, 236); (236, 268) ]
+    let private stringRanges = [ (108, 172); (172, 204); (204, 236) ]
 
     let private signature = [| 0x6fuy; 0x6auy; 0x6euy; 0uy |]
 
@@ -39,8 +39,28 @@ module Parse =
             let size = data.Length
             Array.init (size - 8) (fun i -> data[size - 1 - i] ^^^ key[i % block])
 
+    let private decodeField (encodings: Encoding list) (field: byte[]) : Result<string, UrcError> =
+        let rec tryNext remaining =
+            match remaining with
+            | [] -> Error(UrcError.syntax 108 "undecodable OJN metadata string")
+            | (encoding: Encoding) :: rest ->
+                try
+                    Ok(encoding.GetString field)
+                with :? DecoderFallbackException ->
+                    tryNext rest
+
+        tryNext encodings
+
     let private decodeStrings (data: byte[]) : Result<string * string * string, UrcError> =
         result {
+            Shared.ensureCodePages ()
+
+            let encodings =
+                [
+                    UTF8Encoding(false, true) :> Encoding
+                    Encoding.GetEncoding(949, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback)
+                ]
+
             let fields =
                 stringRanges
                 |> List.map (fun (start, end') ->
@@ -50,42 +70,20 @@ module Parse =
                     | Some nul -> field[.. nul - 1]
                     | None -> field)
 
-            let blob = Array.concat fields
+            let! strings = fields |> List.traverseResultM (decodeField encodings)
 
-            Shared.ensureCodePages ()
-            let utf8 = UTF8Encoding(false, true)
-
-            let cp949 =
-                Encoding.GetEncoding(949, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback)
-
-            let validates (encoding: Encoding) (bytes: byte[]) =
-                try
-                    encoding.GetString bytes |> ignore
-                    true
-                with :? DecoderFallbackException ->
-                    false
-
-            let charset: Encoding option =
-                if blob |> Array.forall (fun byte -> byte < 0x80uy) then Some utf8
-                elif validates utf8 blob then Some utf8
-                elif validates cp949 blob then Some cp949
-                else None
-
-            match charset with
-            | None -> return! Error(UrcError.syntax 108 "strings are neither ASCII, UTF-8, nor CP949")
-            | Some encoding ->
-                let! strings =
-                    fields
-                    |> List.traverseResultM (fun field ->
-                        try
-                            Ok(encoding.GetString field)
-                        with :? DecoderFallbackException ->
-                            Error(UrcError.syntax 108 "invalid string byte sequence"))
-
-                match strings with
-                | title :: artist :: noter :: _ -> return title, artist, noter
-                | _ -> return! Error(UrcError.syntax 108 "missing header string fields")
+            match strings with
+            | [ title; artist; noter ] -> return title, artist, noter
+            | _ -> return! Error(UrcError.syntax 108 "missing header string fields")
         }
+
+    let private sectionEnd (start: int) (noteOffsets: int[]) (coverOffset: int) (fileLen: int) : int =
+        let candidates =
+            [| noteOffsets[0]; noteOffsets[1]; noteOffsets[2]; coverOffset |]
+            |> Array.filter (fun candidate -> candidate > start)
+
+        let bound = if candidates.Length = 0 then fileLen else Array.min candidates
+        min bound fileLen
 
     let rec private readEvents
         (data: byte[])
@@ -115,10 +113,18 @@ module Parse =
             let acc' =
                 if channel = 0 then
                     let value = readF32 data offset
-                    if value <= 0.0 then acc else mkEvent (OjnEventKind.MeasureFraction value) :: acc
+
+                    if not (Double.IsFinite value) || value <= 0.0 then
+                        acc
+                    else
+                        mkEvent (OjnEventKind.MeasureFraction value) :: acc
                 elif channel = 1 then
                     let value = readF32 data offset
-                    if value <= 0.0 then acc else mkEvent (OjnEventKind.BpmChange value) :: acc
+
+                    if not (Double.IsFinite value) || value <= 0.0 then
+                        acc
+                    else
+                        mkEvent (OjnEventKind.BpmChange value) :: acc
                 elif channel >= 9 then
                     acc
                 else
@@ -153,12 +159,12 @@ module Parse =
         else
             let measure = readI32 data offset
             let channel = int (readU16 data (offset + 4))
-            let total = int (readI16 data (offset + 6))
+            let total = int (readU16 data (offset + 6))
 
             if measure < 0 then
                 Error(UrcError.syntax offset "negative measure index")
             else
-                match readEvents data (offset + 8) bound channel measure (max total 0) 0 [] with
+                match readEvents data (offset + 8) bound channel measure total 0 [] with
                 | Error error -> Error error
                 | Ok(nextOffset, acc') -> readPackages data nextOffset bound count (packageIndex + 1) (acc' :: acc)
 
@@ -179,7 +185,13 @@ module Parse =
     let parse (bytes: byte[]) : Result<OjnFile, UrcError> =
         result {
             let data =
-                if bytes.Length >= 8 && bytes[0] = 0x6euy && bytes[1] = 0x65uy && bytes[2] = 0x77uy then
+                if
+                    bytes.Length >= 8
+                    && bytes[0] = 0x6euy
+                    && bytes[1] = 0x65uy
+                    && bytes[2] = 0x77uy
+                    && bytes[4..7] <> signature
+                then
                     decrypt bytes
                 else
                     bytes
@@ -191,7 +203,7 @@ module Parse =
             else
                 let bpm = readF32 data 16
 
-                if bpm <= 0.0 then
+                if not (Double.IsFinite bpm) || bpm <= 0.0 then
                     return! Error(UrcError.syntax 16 "header BPM must be positive")
                 else
                     let! title, artist, noter = decodeStrings data
@@ -201,11 +213,18 @@ module Parse =
 
                     let! difficulties =
                         [ 0 .. 2 ]
-                        |> List.filter (fun index -> packageCounts[index] <> 0)
                         |> List.traverseResultM (fun index ->
-                            let endRaw = if index < 2 then noteOffsets[index + 1] else coverOffset
-                            let endBound = min (max endRaw 0) data.Length
-                            readDifficulty data index noteOffsets[index] endBound packageCounts[index])
+                            let count = packageCounts[index]
+
+                            if count < 0 then
+                                Error(UrcError.syntax (64 + index * 4) "negative package count")
+                            elif count = 0 then
+                                Ok None
+                            else
+                                let start = noteOffsets[index]
+                                let endBound = sectionEnd start noteOffsets coverOffset data.Length
+                                readDifficulty data index start endBound count |> Result.map Some)
+                        |> Result.map (List.choose id)
 
                     if difficulties.IsEmpty then
                         return! Error(UrcError.syntax 0 "no difficulty with note packages")

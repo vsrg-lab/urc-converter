@@ -16,14 +16,16 @@ def first_downbeat_after(
 	time_ms: int,
 ) -> int | None:
 	"""First measure boundary at or after time_ms; each BPM point anchors a grid."""
-	points = sorted(bpm_points)
+	points = sorted(bpm_points, key=lambda point: point[0])
 
-	for index, (time, bpm, beats, _note_value) in enumerate(points):
+	for index, (time, bpm, beats, note_value) in enumerate(points):
 		next_time = points[index + 1][0] if index + 1 < len(points) else None
 		if time_ms <= time:
 			return round_ms(time)
 		if next_time is None or time_ms < next_time:
-			measure_ms = beats * 60000.0 / bpm
+			if bpm <= 0 or beats <= 0 or note_value <= 0:
+				continue
+			measure_ms = beats * (4.0 / note_value) * 60000.0 / bpm
 			if measure_ms <= 0:
 				continue
 			anchor = time + math.ceil((time_ms - time) / measure_ms - 1e-9) * measure_ms

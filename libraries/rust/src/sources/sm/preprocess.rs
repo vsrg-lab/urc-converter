@@ -18,7 +18,9 @@ pub(crate) fn rows(beats: f64) -> i64 {
 pub(crate) fn warp_intervals(warp_segs: &[(f64, f64)]) -> Vec<(i64, i64)> {
     let mut spans: Vec<(i64, i64)> = warp_segs
         .iter()
+        .filter(|&&(_, length)| length > 0.0)
         .map(|&(beat, length)| (rows(beat), rows(beat) + rows(length)))
+        .filter(|&(start, dest)| dest > start)
         .collect();
     spans.sort_by_key(|span| span.0);
     let mut merged: Vec<(i64, i64)> = Vec::new();
@@ -81,14 +83,15 @@ pub(crate) fn preprocess(timing: &Timing) -> Result<Segments> {
     let mut out_bpm: Vec<(f64, f64)> = Vec::new();
     let mut out_stop: Vec<(f64, f64)> = Vec::new();
     let mut out_warp: Vec<(f64, f64)> = Vec::new();
-    if bpm > 0.0 && bpm <= FAST_BPM_WARP {
-        out_bpm.push((0.0, bpm));
-    }
-
     let mut prevbeat = 0.0_f64;
     let mut timeofs = 0.0_f64;
     let mut warpstart = -1.0_f64;
     let mut prewarpbpm = 0.0_f64;
+    if bpm > 0.0 && bpm <= FAST_BPM_WARP {
+        out_bpm.push((0.0, bpm));
+    } else {
+        warpstart = 0.0;
+    }
     let mut ibpm = index;
     let mut istop = 0;
     while ibpm < bpms.len() || istop < stops.len() {
@@ -154,9 +157,13 @@ pub(crate) fn preprocess(timing: &Timing) -> Result<Segments> {
             prevbeat - (timeofs * bpm / 60.0)
         };
         out_warp.push((warpstart, warpend - warpstart));
-        if bpm != prewarpbpm {
+        if !never_ends && bpm != prewarpbpm {
             out_bpm.push((warpstart, bpm));
         }
+    }
+
+    if out_bpm.is_empty() {
+        return Err(UrcError::new("syntax", 1, "no positive BPM in simfile"));
     }
 
     Ok((offset, out_bpm, out_stop, out_warp))

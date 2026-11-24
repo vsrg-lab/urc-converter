@@ -23,7 +23,7 @@ export function tokenize(text: string): string[][] {
 	const n = text.length;
 	while (i < n) {
 		if (i + 1 < n && text[i] === "/" && text[i + 1] === "/") {
-			while (i < n && text[i] !== "\n")
+			while (i < n && text[i] !== "\n" && text[i] !== "\r")
 				i++;
 			continue;
 		}
@@ -80,8 +80,10 @@ export function tokenize(text: string): string[][] {
 		i++;
 	}
 
-	if (reading)
+	if (reading) {
 		params.push(current);
+		values.push(params);
+	}
 	return values;
 }
 
@@ -132,7 +134,10 @@ export function parseFloatStrict(token: string): number {
 	const text = token.trim();
 	if (!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text))
 		throw new UrcError("syntax", 1, `invalid number: ${token}`);
-	return Number(text);
+	const parsed = Number(text);
+	if (!Number.isFinite(parsed))
+		throw new UrcError("syntax", 1, `invalid number: ${token}`);
+	return parsed;
 }
 
 /**

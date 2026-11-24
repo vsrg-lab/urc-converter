@@ -1,16 +1,22 @@
 //! Mapper from the BMS-family source model onto a URC chart.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::error::{Result, UrcError};
 use crate::model::{Chart, Layout, Metadata, Note, NoteType, Version};
 use crate::sources::shared::{build_timing, check_hold_overlap, round_ms};
-use super::channels::{build_notes, channel_kind, detect_mode, id_value, resolve_layout, side_of};
+use super::channels::{build_notes, channel_kind, detect_mode, resolve_layout, side_of};
 use super::model::BmsChart;
 
 const MEASURE_US: f64 = 240_000_000.0;
 
 const SYSTEM_CHANNELS: [&str; 5] = ["02", "03", "08", "09", "SC"];
+
+fn hex_bpm(obj: &str) -> Result<f64> {
+    u64::from_str_radix(obj, 16)
+        .map(|v| v as f64)
+        .map_err(|_| UrcError::new("syntax", 1, format!("invalid hex BPM in channel 03: \"{obj}\"")))
+}
 
 /// Maps a BMS-family chart onto a URC chart.
 pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
@@ -41,6 +47,7 @@ pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
     let mut entries: Vec<(f64, usize, EntryKind)> = vec![(0.0, 0, EntryKind::Bpm(bpm_initial))];
     let mut objects: Vec<(f64, String, String)> = Vec::new();
     let mut used = HashSet::new();
+    let mut ln_channels: BTreeSet<String> = BTreeSet::new();
 
     for m in 0..=max_measure {
         let rate = chart.rates.get(&m).copied().unwrap_or(1.0);
@@ -66,13 +73,19 @@ pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
                             continue;
                         }
                         if channel == "03" {
-                            let digits = id_value(obj, chart.base);
-                            let bpm_val = ((digits / 36) * 16 + (digits % 36)) as f64;
+                            let bpm_val = hex_bpm(obj)?;
                             entries.push((y, 0, EntryKind::Bpm(bpm_val)));
                         } else if channel == "08" {
                             let bpm_val = chart.bpm_defs.get(obj).copied().ok_or_else(|| {
                                 UrcError::new("syntax", 1, format!("undefined #BPM{obj}"))
                             })?;
+                            if bpm_val <= 0.0 {
+                                return Err(UrcError::new(
+                                    "syntax",
+                                    1,
+                                    format!("non-positive #BPM{obj}: {bpm_val}"),
+                                ));
+                            }
                             entries.push((y, 0, EntryKind::Bpm(bpm_val)));
                         } else if channel == "09" {
                             let stop_val = chart.stop_defs.get(obj).copied().ok_or_else(|| {
@@ -93,6 +106,9 @@ pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
                         Some(k) => k,
                         None => continue,
                     };
+                    if kind == "ln" {
+                        ln_channels.insert(channel.clone());
+                    }
                     if obj != "00" {
                         let side = side_of(channel.chars().next().unwrap());
                         let second = channel.chars().nth(1).unwrap();
@@ -106,6 +122,25 @@ pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
                     entries.push((y, 4, EntryKind::Object(objects.len() - 1)));
                 }
             }
+        }
+    }
+
+    if chart.lntype == 2 && !ln_channels.is_empty() {
+        for channel in &ln_channels {
+            for m in 0..=max_measure {
+                let present = chart
+                    .measures
+                    .get(&m)
+                    .is_some_and(|mm| mm.contains_key(channel));
+                if !present {
+                    let y = boundaries[m as usize];
+                    objects.push((y, channel.clone(), "00".to_string()));
+                    entries.push((y, 4, EntryKind::Object(objects.len() - 1)));
+                }
+            }
+            let end_y = boundaries[(max_measure + 1) as usize];
+            objects.push((end_y, channel.clone(), "00".to_string()));
+            entries.push((end_y, 4, EntryKind::Object(objects.len() - 1)));
         }
     }
 
@@ -154,7 +189,7 @@ pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
             match kind {
                 EntryKind::Bpm(v) => new_bpm = Some(v),
                 EntryKind::Meter(v) => new_beats = v,
-                EntryKind::Stop(v) => pending_stop = MEASURE_US * v / new_bpm.unwrap(),
+                EntryKind::Stop(v) => pending_stop += MEASURE_US * v / new_bpm.unwrap(),
                 EntryKind::Scroll(v) => scroll = Some(v),
                 EntryKind::Object(idx) => timed[idx] = time_us,
                 EntryKind::Anchor => anchors.push(round_ms(time_us / 1000.0)),

@@ -1,5 +1,8 @@
 """Parser for StepMania (.sm/.ssc) simfiles."""
 
+import math
+from dataclasses import dataclass
+
 from ...error import UrcError
 from .model import SmChart, SmFile, SmNote, Timing
 
@@ -53,24 +56,40 @@ def resolve_lanes(steps_type: str) -> int:
 	return _STEP_LANES[name]
 
 
+@dataclass
+class _PendingChart:
+	chart: SmChart
+	raw_notes: str | None = None
+
+
+def _finalize_pending(simfile: SmFile, pending: _PendingChart | None) -> None:
+	if pending is None or pending.raw_notes is None:
+		return
+	pending.chart.notes = _parse_note_data(
+		pending.raw_notes, resolve_lanes(pending.chart.steps_type)
+	)
+	simfile.charts.append(pending.chart)
+
+
 def parse_sm(text: str) -> SmFile:
 	"""Parse a .sm or .ssc simfile into its source model."""
 	simfile = SmFile()
-	chart: SmChart | None = None
+	pending: _PendingChart | None = None
 
 	for params in _tokenize(text):
 		tag = params[0].upper()
 		value = params[1] if len(params) > 1 else ""
 
 		if tag == "NOTEDATA":
-			chart = SmChart(steps_type="")
+			_finalize_pending(simfile, pending)
+			pending = _PendingChart(chart=SmChart(steps_type=""))
 			continue
 		if tag in ("NOTES", "NOTES2"):
-			if chart is not None:
-				chart.notes = _parse_note_data(value, resolve_lanes(chart.steps_type))
-				simfile.charts.append(chart)
-				chart = None
+			if pending is not None and len(params) < 7:
+				pending.raw_notes = value
 			elif len(params) >= 7:
+				_finalize_pending(simfile, pending)
+				pending = None
 				block = SmChart(
 					steps_type=params[1].strip(),
 					description=params[2].strip(),
@@ -81,11 +100,12 @@ def parse_sm(text: str) -> SmFile:
 				simfile.charts.append(block)
 			continue
 
-		if chart is None:
+		if pending is None:
 			_song_tag(simfile, tag, value)
 		else:
-			_chart_tag(simfile, chart, tag, value)
+			_chart_tag(simfile, pending.chart, tag, value)
 
+	_finalize_pending(simfile, pending)
 	if not simfile.charts:
 		raise UrcError("syntax", 1, "no chart in simfile")
 	return simfile
@@ -116,6 +136,8 @@ def _chart_tag(simfile: SmFile, chart: SmChart, tag: str, value: str) -> None:
 	elif tag == "CREDIT":
 		chart.credit = value
 	elif tag in _TIMING_TAGS:
+		if not value.strip():
+			return
 		if chart.timing is None:
 			chart.timing = Timing(offset=simfile.timing.offset)
 		_timing_tag(chart.timing, tag, value)
@@ -123,13 +145,13 @@ def _chart_tag(simfile: SmFile, chart: SmChart, tag: str, value: str) -> None:
 
 def _timing_tag(timing: Timing, tag: str, value: str) -> None:
 	if tag == "OFFSET":
-		timing.offset = _float(value)
+		timing.offset = _float(value) if value.strip() else 0.0
 	elif tag == "BPMS":
 		timing.bpms.extend(_pairs(value, skip_zero=True))
 	elif tag in ("STOPS", "FREEZES"):
 		timing.stops.extend(_pairs(value, skip_zero=True))
 	elif tag == "DELAYS":
-		timing.delays.extend(_pairs(value, skip_zero=True))
+		timing.delays.extend(entry for entry in _pairs(value) if entry[1] > 0)
 	elif tag == "WARPS":
 		timing.warps.extend(_pairs(value))
 	elif tag == "SCROLLS":
@@ -160,7 +182,7 @@ def _tokenize(text: str) -> list[list[str]]:
 	n = len(text)
 	while i < n:
 		if i + 1 < n and text[i] == "/" and text[i + 1] == "/":
-			while i < n and text[i] != "\n":
+			while i < n and text[i] not in ("\n", "\r"):
 				i += 1
 			continue
 		if reading and text[i] == "#":
@@ -245,15 +267,24 @@ def _beat(token: str) -> float:
 
 
 def _float(token: str) -> float:
+	text = token.strip()
+	if "_" in text:
+		raise UrcError("syntax", 1, f"invalid number: {token}")
 	try:
-		return float(token.strip())
+		value = float(text)
 	except ValueError:
 		raise UrcError("syntax", 1, f"invalid number: {token}") from None
+	if not math.isfinite(value):
+		raise UrcError("syntax", 1, f"invalid number: {token}")
+	return value
 
 
 def _int(token: str) -> int:
+	text = token.strip()
+	if "_" in text:
+		raise UrcError("syntax", 1, f"invalid integer: {token}")
 	try:
-		return int(token.strip())
+		return int(text)
 	except ValueError:
 		raise UrcError("syntax", 1, f"invalid integer: {token}") from None
 
@@ -266,7 +297,8 @@ def _parse_note_data(data: str, lanes: int) -> list[SmNote]:
 	for part in data.split(","):
 		if not part:
 			continue
-		content = [line for line in (raw.strip(" \t\r") for raw in part.split("\n")) if line]
+		normalized = part.replace("\r\n", "\n").replace("\r", "\n")
+		content = [line for line in (raw.strip(" \t") for raw in normalized.split("\n")) if line]
 		for index, line in enumerate(content):
 			row = _row((measure + index / len(content)) * 4.0)
 			track = 0
@@ -292,8 +324,9 @@ def _parse_note_data(data: str, lanes: int) -> list[SmNote]:
 					notes.append(SmNote(row=row, track=track, kind="lift"))
 				elif char == "F":
 					notes.append(SmNote(row=row, track=track, kind="fake"))
-				if position < len(line) and line[position] == "[":
-					end = line.find("]", position)
+				while position < len(line) and line[position] in ("[", "{"):
+					close = "]" if line[position] == "[" else "}"
+					end = line.find(close, position)
 					position = len(line) if end < 0 else end + 1
 				track += 1
 		measure += 1

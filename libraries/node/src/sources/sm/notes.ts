@@ -17,8 +17,10 @@ export function parseNoteData(data: string, lanes: number): SmNote[] {
 		if (part === "")
 			continue;
 		const content = part
+			.replace(/\r\n/g, "\n")
+			.replace(/\r/g, "\n")
 			.split("\n")
-			.map(raw => raw.replace(/^[ \t\r]+/, "").replace(/[ \t\r]+$/, ""))
+			.map(raw => raw.replace(/^[ \t]+/, "").replace(/[ \t]+$/, ""))
 			.filter(line => line !== "");
 		for (let index = 0; index < content.length; index++) {
 			const line = content[index];
@@ -53,8 +55,9 @@ export function parseNoteData(data: string, lanes: number): SmNote[] {
 					notes.push({ row, track, kind: "lift", tailRow: null });
 				else if (char === "F")
 					notes.push({ row, track, kind: "fake", tailRow: null });
-				if (position < line.length && line[position] === "[") {
-					const end = line.indexOf("]", position);
+				while (position < line.length && (line[position] === "[" || line[position] === "{")) {
+					const close = line[position] === "[" ? "]" : "}";
+					const end = line.indexOf(close, position);
 					position = end < 0 ? line.length : end + 1;
 				}
 				track++;

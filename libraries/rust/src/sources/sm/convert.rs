@@ -16,6 +16,7 @@ type BpmPoint = (i64, f64, u64, u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EntryKind {
     Warp,
+    WarpEnd,
     Delay,
     Note,
     Tail,
@@ -28,6 +29,7 @@ enum EntryKind {
 
 #[derive(Debug, Clone, Copy)]
 enum EntryValue {
+    Row(i64),
     Number(f64),
     NoteIndex(usize),
     Meter(u64, u64),
@@ -40,7 +42,17 @@ pub fn convert_sm(simfile: &SmFile) -> Result<Vec<Chart>> {
 
 fn convert_chart(simfile: &SmFile, chart: &SmChart) -> Result<Chart> {
     let lanes = resolve_lanes(&chart.steps_type)?;
-    let timing = chart.timing.as_ref().unwrap_or(&simfile.timing);
+    let fallback_timing;
+    let timing = match &chart.timing {
+        None => &simfile.timing,
+        Some(ct) if ct.bpms.is_empty() => {
+            let mut merged = ct.clone();
+            merged.bpms = simfile.timing.bpms.clone();
+            fallback_timing = merged;
+            &fallback_timing
+        }
+        Some(ct) => ct,
+    };
     let (offset, bpm_segs, stop_segs, warp_segs) = preprocess(timing)?;
     let mut all_warps = warp_segs;
     all_warps.extend_from_slice(&timing.warps);
@@ -50,7 +62,7 @@ fn convert_chart(simfile: &SmFile, chart: &SmChart) -> Result<Chart> {
 
     let mut entries: Vec<(i64, u8, EntryKind, EntryValue)> = Vec::new();
     for &(start, dest) in &intervals {
-        entries.push((start, 0, EntryKind::Warp, EntryValue::Number(dest as f64)));
+        entries.push((start, 0, EntryKind::Warp, EntryValue::Row(dest)));
     }
     for &(beat, seconds) in &timing.delays {
         entries.push((rows(beat), 1, EntryKind::Delay, EntryValue::Number(seconds)));
@@ -79,10 +91,16 @@ fn convert_chart(simfile: &SmFile, chart: &SmChart) -> Result<Chart> {
         entries.push((rows(beat), 6, EntryKind::Scroll, EntryValue::Number(ratio)));
     }
     let max_row = entries.iter().map(|entry| entry.0).max().unwrap_or(0);
+    let anchor_limit = max_row + MEASURE_ROWS;
     let mut row = 0;
-    while row < max_row + MEASURE_ROWS {
-        entries.push((row, 2, EntryKind::Anchor, EntryValue::Number(0.0)));
+    while row < anchor_limit {
+        entries.push((row, 2, EntryKind::Anchor, EntryValue::Row(0)));
         row += MEASURE_ROWS;
+    }
+    for &(_, dest) in &intervals {
+        if dest <= anchor_limit {
+            entries.push((dest, 0, EntryKind::WarpEnd, EntryValue::Row(0)));
+        }
     }
 
     let mut head_times = vec![0.0_f64; notes.len()];
@@ -120,8 +138,8 @@ fn convert_chart(simfile: &SmFile, chart: &SmChart) -> Result<Chart> {
         while i < entries.len() && entries[i].0 == row {
             let (_, _, kind, value) = &entries[i];
             match (kind, value) {
-                (EntryKind::Warp, EntryValue::Number(dest)) => {
-                    let dest = *dest as i64;
+                (EntryKind::Warp, EntryValue::Row(dest)) => {
+                    let dest = *dest;
                     if warping {
                         warp_dest = warp_dest.max(dest);
                     } else {
@@ -129,6 +147,7 @@ fn convert_chart(simfile: &SmFile, chart: &SmChart) -> Result<Chart> {
                         warp_dest = dest;
                     }
                 }
+                (EntryKind::WarpEnd, _) => {}
                 (EntryKind::Delay, EntryValue::Number(pause)) => seconds += *pause,
                 (EntryKind::Note, EntryValue::NoteIndex(index)) => {
                     head_times[*index] = seconds;

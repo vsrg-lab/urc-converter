@@ -1,6 +1,9 @@
 """Parser for .osu text."""
 
+import math
+
 from ...error import UrcError
+from .._shared import round_ms
 from .model import OsuBeatmap, OsuHitObject, OsuTimingPoint
 
 
@@ -13,7 +16,7 @@ def parse_osu(text: str) -> OsuBeatmap:
 		line = raw.strip()
 
 		if line.startswith("[") and line.endswith("]"):
-			section = line[1:-1]
+			section = line[1:-1].strip()
 			continue
 
 		if line == "" or line.startswith("//") or section is None:
@@ -34,19 +37,20 @@ def parse_osu(text: str) -> OsuBeatmap:
 
 
 def _lines(text: str) -> list[str]:
-	if text.startswith("\ufeff"):
-		text = text[1:]
+	text = text.lstrip("\ufeff")
 	return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 
 
 def _general(beatmap: OsuBeatmap, line: str, line_no: int) -> None:
-	key, _, value = line.partition(":")
-	if key.strip() == "Mode":
+	key, sep, value = line.partition(":")
+	if sep and key.strip() == "Mode":
 		beatmap.mode = _to_int(value.strip(), line_no, "Mode")
 
 
 def _metadata(beatmap: OsuBeatmap, line: str) -> None:
-	key, _, value = line.partition(":")
+	key, sep, value = line.partition(":")
+	if not sep:
+		return
 	attribute = {
 		"Title": "title",
 		"TitleUnicode": "title_unicode",
@@ -60,7 +64,9 @@ def _metadata(beatmap: OsuBeatmap, line: str) -> None:
 
 
 def _difficulty(beatmap: OsuBeatmap, line: str, line_no: int) -> None:
-	key, _, value = line.partition(":")
+	key, sep, value = line.partition(":")
+	if not sep:
+		return
 	name = key.strip()
 
 	if name == "CircleSize":
@@ -74,11 +80,18 @@ def _timing_point(line: str, line_no: int) -> OsuTimingPoint:
 	if len(fields) < 2:
 		raise UrcError("syntax", line_no, f"timing point needs at least 2 fields: {line!r}")
 
+	meter = _to_int(fields[2], line_no, "meter") if len(fields) > 2 and fields[2] else 4
+	if meter <= 0:
+		meter = 4
+	uninherited = (
+		_to_int(fields[6], line_no, "uninherited") != 0 if len(fields) > 6 and fields[6] else True
+	)
+
 	return OsuTimingPoint(
 		time=_to_int(fields[0], line_no, "timing time"),
 		beat_length=_to_float(fields[1], line_no, "beat length"),
-		meter=_to_int(fields[2], line_no, "meter") if len(fields) > 2 and fields[2] else 4,
-		uninherited=bool(int(fields[6])) if len(fields) > 6 and fields[6] else True,
+		meter=meter,
+		uninherited=uninherited,
 	)
 
 
@@ -99,20 +112,20 @@ def _hit_object(line: str, line_no: int) -> OsuHitObject:
 	if is_hold:
 		if len(fields) < 6:
 			raise UrcError("syntax", line_no, f"hold note needs an end time: {line!r}")
-		end_time = _to_int(fields[5].split(":", 1)[0], line_no, "hold end time")
+		end_time = _to_int(fields[5].split(":", 1)[0].strip(), line_no, "hold end time")
 
 	return OsuHitObject(x=x, time=time, is_hold=is_hold, end_time=end_time)
 
 
 def _to_int(token: str, line_no: int, label: str) -> int:
-	try:
-		return round(float(token))
-	except ValueError:
-		raise UrcError("syntax", line_no, f"invalid {label}: {token!r}") from None
+	return round_ms(_to_float(token, line_no, label))
 
 
 def _to_float(token: str, line_no: int, label: str) -> float:
 	try:
-		return float(token)
+		value = float(token)
 	except ValueError:
 		raise UrcError("syntax", line_no, f"invalid {label}: {token!r}") from None
+	if not math.isfinite(value):
+		raise UrcError("syntax", line_no, f"invalid {label}: {token!r}")
+	return value

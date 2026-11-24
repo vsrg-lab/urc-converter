@@ -88,11 +88,13 @@ module Parse =
                 let! time = parseRoundedInt fields[0] lineNo "timing time"
                 let! beatLength = parseFloat fields[1] lineNo "beat length"
 
-                let! meter =
+                let! rawMeter =
                     if fields.Length > 2 && fields[2] <> "" then
                         parseRoundedInt fields[2] lineNo "meter"
                     else
                         Ok 4
+
+                let meter = if rawMeter > 0 then rawMeter else 4
 
                 let! uninherited =
                     if fields.Length > 6 && fields[6] <> "" then

@@ -19,17 +19,12 @@ export const LAYOUTS: Record<string, [number, number, number[] | null]> = {
 };
 
 /**
- * Decodes a two-character channel ID or object value.
+ * Parses a two-character hexadecimal BPM value from BMS channel 03.
  */
-export function idValue(text: string, base: number): number {
-	function digit(c: string): number {
-		if (c >= "0" && c <= "9")
-			return c.charCodeAt(0) - 48;
-		if (c >= "A" && c <= "Z")
-			return c.charCodeAt(0) - 65 + 10;
-		return c.charCodeAt(0) - 97 + 36;
-	}
-	return digit(text[0]) * base + digit(text[1]);
+export function hexBpm(text: string): number {
+	if (!/^[0-9A-Fa-f]{2}$/.test(text))
+		throw new UrcError("syntax", 1, `invalid hex BPM in channel 03: "${text}"`);
+	return Number.parseInt(text, 16);
 }
 
 /**
@@ -206,7 +201,7 @@ export function buildNotes(
 	objects: Array<[number, string, string]>,
 	timed: number[]
 ): Array<[number, number, NoteType]> {
-	const streams = new Map<string, Array<[number, string]>>();
+	const streams = new Map<string, Array<[number, number, string]>>();
 	for (let index = 0; index < objects.length; index++) {
 		const channel = objects[index][1];
 		let stream = streams.get(channel);
@@ -214,11 +209,14 @@ export function buildNotes(
 			stream = [];
 			streams.set(channel, stream);
 		}
-		stream.push([timed[index], objects[index][2]]);
+		stream.push([objects[index][0], timed[index], objects[index][2]]);
 	}
 
 	const notes: Array<[number, number, NoteType]> = [];
-	for (const [channel, stream] of streams.entries()) {
+	const sortedStreams = [...streams.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+	for (const [channel, rawStream] of sortedStreams) {
+		rawStream.sort((a, b) => a[0] - b[0]);
+		const stream: Array<[number, string]> = rawStream.map(([, time, obj]) => [time, obj]);
 		const lane = getLane(mode, channel);
 		if (lane === undefined)
 			continue;
@@ -232,18 +230,20 @@ export function buildNotes(
 		else {
 			let pending: number | null = null;
 			for (const [time, obj] of stream)
-				if (chart.lnobj !== null && obj === chart.lnobj && pending !== null) {
-					const lsMs = roundMs(pending / 1000.0);
-					const leMs = roundMs(time / 1000.0);
-					if (leMs <= lsMs)
-						throw new UrcError(
-							ZERO_LENGTH_HOLD,
-							1,
-							`zero-length hold on lane ${lane} at ${lsMs}ms`
-						);
-					notes.push([lsMs, lane, "LS"]);
-					notes.push([leMs, lane, "LE"]);
-					pending = null;
+				if (chart.lnobj !== null && obj === chart.lnobj) {
+					if (pending !== null) {
+						const lsMs = roundMs(pending / 1000.0);
+						const leMs = roundMs(time / 1000.0);
+						if (leMs <= lsMs)
+							throw new UrcError(
+								ZERO_LENGTH_HOLD,
+								1,
+								`zero-length hold on lane ${lane} at ${lsMs}ms`
+							);
+						notes.push([lsMs, lane, "LS"]);
+						notes.push([leMs, lane, "LE"]);
+						pending = null;
+					}
 				} else {
 					if (pending !== null)
 						notes.push([roundMs(pending / 1000.0), lane, "N"]);

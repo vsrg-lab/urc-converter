@@ -47,24 +47,28 @@ module Convert =
     /// Candidates are enumerated explicitly instead of relying on
     /// formatter-specific tie-breaking, so every language agrees.
     let private canonicalBpm (value: float) : float =
-        let invariant = Globalization.CultureInfo.InvariantCulture
+        if not (Double.IsFinite value) || value >= 1e15 then
+            value
+        else
+            let invariant = Globalization.CultureInfo.InvariantCulture
 
-        let matched =
-            scales
-            |> Seq.indexed
-            |> Seq.tryPick (fun (precision, scale) ->
-                let baseValue = int64 (Math.Truncate(value * scale))
-                let candidates = [ baseValue; baseValue + 1L; baseValue - 1L ]
+            let matched =
+                scales
+                |> Seq.indexed
+                |> Seq.takeWhile (fun (_, scale) -> value * scale < 9e15)
+                |> Seq.tryPick (fun (precision, scale) ->
+                    let baseValue = int64 (Math.Truncate(value * scale))
+                    let candidates = [ baseValue; baseValue + 1L; baseValue - 1L ]
 
-                candidates
-                |> List.tryFind (fun candidate ->
-                    let text = decimalOf candidate precision
-                    float (float32 (Double.Parse(text, invariant))) = value)
-                |> Option.map (fun candidate -> candidate, precision))
+                    candidates
+                    |> List.tryFind (fun candidate ->
+                        let text = decimalOf candidate precision
+                        float (float32 (Double.Parse(text, invariant))) = value)
+                    |> Option.map (fun candidate -> candidate, precision))
 
-        match matched with
-        | Some(candidate, precision) -> Double.Parse(decimalOf candidate precision, invariant)
-        | None -> value
+            match matched with
+            | Some(candidate, precision) -> Double.Parse(decimalOf candidate precision, invariant)
+            | None -> value
 
     let private gcd (a: int) (b: int) =
         let rec loop current remainder =
@@ -186,18 +190,32 @@ module Convert =
                 let nextResult =
                     match event.Kind with
                     | OjnEventKind.MeasureFraction value ->
-                        match fractionMeter value with
-                        | Some meter when meter <> stepped.Meter ->
-                            Ok
-                                { stepped with
-                                    Fraction = value
-                                    Meter = meter
-                                    MeterDirty = true
-                                    BpmPoints =
-                                        (Shared.roundMs time, canonicalBpm stepped.Bpm, fst meter, snd meter)
-                                        :: stepped.BpmPoints
-                                }
-                        | _ -> Ok { stepped with Fraction = value }
+                        if abs (value - 1.0) <= MeterTolerance then
+                            if stepped.Meter <> (4, 4) then
+                                Ok
+                                    { stepped with
+                                        Fraction = value
+                                        Meter = (4, 4)
+                                        MeterDirty = false
+                                        BpmPoints =
+                                            (Shared.roundMs time, canonicalBpm stepped.Bpm, 4, 4)
+                                            :: stepped.BpmPoints
+                                    }
+                            else
+                                Ok { stepped with Fraction = value }
+                        else
+                            match fractionMeter value with
+                            | Some meter when meter <> stepped.Meter ->
+                                Ok
+                                    { stepped with
+                                        Fraction = value
+                                        Meter = meter
+                                        MeterDirty = true
+                                        BpmPoints =
+                                            (Shared.roundMs time, canonicalBpm stepped.Bpm, fst meter, snd meter)
+                                            :: stepped.BpmPoints
+                                    }
+                            | _ -> Ok { stepped with Fraction = value }
                     | OjnEventKind.BpmChange value ->
                         Ok
                             { stepped with

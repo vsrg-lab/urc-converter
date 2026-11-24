@@ -18,7 +18,11 @@ use super::random::JavaRandom;
 /// Parses BMS-family bytes into a source model.
 pub fn parse_bms(data: &[u8], options: &BmsParseOptions) -> Result<BmsChart> {
     let text = decode_bytes(data)?;
-    let base = scan_base(&text)?;
+    let normalized = text
+        .trim_start_matches('\u{feff}')
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    let base = scan_base(&normalized)?;
 
     let mut chart = BmsChart {
         pms: options.pms,
@@ -38,42 +42,38 @@ pub fn parse_bms(data: &[u8], options: &BmsParseOptions) -> Result<BmsChart> {
 
     let mut random_gen = options.seed.map(JavaRandom::new);
     let mut frames: Vec<(bool, bool)> = Vec::new();
-    let mut random_value: Option<u64> = None;
+    let mut random_value: Option<i64> = None;
     let mut branch_index = 0;
 
-    for (offset, raw) in text
-        .strip_prefix('\u{feff}')
-        .unwrap_or(&text)
-        .lines()
-        .enumerate()
-    {
+    for (offset, raw) in normalized.split('\n').enumerate() {
         let line_no = offset as u32 + 1;
         let line = raw.trim();
         if !line.starts_with('#') {
             continue;
         }
         let head = &line[1..];
+        let hb = head.as_bytes();
 
-        if head.len() >= 6 && head[..3].chars().all(|c| c.is_ascii_digit()) && &head[5..6] == ":" {
+        if hb.len() >= 6
+            && hb[0..3].iter().all(u8::is_ascii_digit)
+            && hb[3].is_ascii_alphanumeric()
+            && hb[4].is_ascii_alphanumeric()
+            && hb[5] == b':'
+        {
             if !frames.iter().any(|frame| frame.0) {
                 let measure = head[..3].parse::<i64>().unwrap();
-                let channel = &head[3..5];
+                let channel = head[3..5].to_ascii_uppercase();
                 let payload = &head[6..];
-                add_message(&mut chart, measure, channel, payload, line_no)?;
+                add_message(&mut chart, measure, &channel, payload, line_no)?;
             }
             continue;
         }
 
-        let (command, argument) = match head.find(' ') {
-            Some(idx) => (&head[..idx], head[idx + 1..].trim()),
-            None => (head, ""),
-        };
+        let (command, argument) = split_command(head);
         let word = command.to_ascii_uppercase();
 
         if word == "RANDOM" {
-            let count = argument.parse::<u64>().map_err(|_| {
-                UrcError::new("syntax", line_no, format!("invalid #RANDOM: {argument}"))
-            })?;
+            let count = parse_int(argument, line_no, "#RANDOM")?;
             if count < 1 {
                 return Err(UrcError::new(
                     "syntax",
@@ -85,16 +85,16 @@ pub fn parse_bms(data: &[u8], options: &BmsParseOptions) -> Result<BmsChart> {
                 && branch_index < branches.len()
             {
                 let p = branches[branch_index];
-                if !(1..=count).contains(&p) {
+                if p < 1 || p > count as u64 {
                     return Err(UrcError::new(
                         "syntax",
                         line_no,
                         format!("branch pick out of range: {p}"),
                     ));
                 }
-                p
+                p as i64
             } else if let Some(ref mut rng) = random_gen {
-                rng.next_int(count) + 1
+                (rng.next_int(count as u64) + 1) as i64
             } else {
                 1
             };
@@ -104,20 +104,20 @@ pub fn parse_bms(data: &[u8], options: &BmsParseOptions) -> Result<BmsChart> {
         } else if word == "IF" {
             let val =
                 random_value.ok_or_else(|| UrcError::new("syntax", line_no, "unmatched #IF"))?;
-            let condition = argument.parse::<u64>().map_err(|_| {
-                UrcError::new("syntax", line_no, format!("invalid #IF: {argument}"))
-            })?;
+            let condition = parse_int(argument, line_no, "#IF")?;
             frames.push((val != condition, val == condition));
         } else if word == "ELSEIF" {
             let last = frames
                 .last_mut()
                 .ok_or_else(|| UrcError::new("syntax", line_no, "unmatched #ELSEIF"))?;
-            let condition = argument.parse::<u64>().map_err(|_| {
-                UrcError::new("syntax", line_no, format!("invalid #ELSEIF: {argument}"))
-            })?;
+            let condition = parse_int(argument, line_no, "#ELSEIF")?;
             let val = random_value.unwrap();
-            let matched = last.1 || val == condition;
-            *last = (!matched, matched);
+            if last.1 {
+                *last = (true, true);
+            } else {
+                let now = val == condition;
+                *last = (!now, now);
+            }
         } else if word == "ELSE" {
             let last = frames
                 .last_mut()
@@ -139,37 +139,28 @@ pub fn parse_bms(data: &[u8], options: &BmsParseOptions) -> Result<BmsChart> {
         } else if frames.iter().any(|frame| frame.0) {
             continue;
         } else if word == "BPM" {
-            let bpm = argument.parse::<f64>().map_err(|_| {
-                UrcError::new("syntax", line_no, format!("invalid #BPM: {argument}"))
-            })?;
+            let bpm = parse_float(argument, line_no, "#BPM")?;
             chart.bpm = Some(bpm);
-        } else if (command.len() == 5 && command[..3].eq_ignore_ascii_case("BPM"))
-            || (command.len() == 8 && command[..6].eq_ignore_ascii_case("EXBPM"))
+        } else if command.is_ascii()
+            && ((command.len() == 5 && word.starts_with("BPM"))
+                || (command.len() == 7 && word.starts_with("EXBPM")))
         {
-            let bpm = argument.parse::<f64>().map_err(|_| {
-                UrcError::new("syntax", line_no, format!("invalid {command}: {argument}"))
-            })?;
+            let bpm = parse_float(argument, line_no, command)?;
             chart
                 .bpm_defs
-                .insert(command[command.len() - 2..].to_string(), bpm);
-        } else if command.len() == 6 && command[..4].eq_ignore_ascii_case("STOP") {
-            let stop = argument.parse::<f64>().map_err(|_| {
-                UrcError::new("syntax", line_no, format!("invalid {command}: {argument}"))
-            })?;
+                .insert(norm_id(&command[command.len() - 2..], base), bpm);
+        } else if command.is_ascii() && command.len() == 6 && word.starts_with("STOP") {
+            let stop = parse_float(argument, line_no, command)?;
             chart
                 .stop_defs
-                .insert(command[command.len() - 2..].to_string(), stop.abs() / 192.0);
-        } else if command.len() == 8 && command[..6].eq_ignore_ascii_case("SCROLL") {
-            let scroll = argument.parse::<f64>().map_err(|_| {
-                UrcError::new("syntax", line_no, format!("invalid {command}: {argument}"))
-            })?;
+                .insert(norm_id(&command[command.len() - 2..], base), stop.abs() / 192.0);
+        } else if command.is_ascii() && command.len() == 8 && word.starts_with("SCROLL") {
+            let scroll = parse_float(argument, line_no, command)?;
             chart
                 .scroll_defs
-                .insert(command[command.len() - 2..].to_string(), scroll);
+                .insert(norm_id(&command[command.len() - 2..], base), scroll);
         } else if word == "LNTYPE" {
-            let lntype = argument.parse::<u32>().map_err(|_| {
-                UrcError::new("syntax", line_no, format!("invalid #LNTYPE: {argument}"))
-            })?;
+            let lntype = parse_int(argument, line_no, "#LNTYPE")?;
             if lntype != 1 && lntype != 2 {
                 return Err(UrcError::new(
                     "syntax",
@@ -177,12 +168,12 @@ pub fn parse_bms(data: &[u8], options: &BmsParseOptions) -> Result<BmsChart> {
                     format!("unsupported #LNTYPE: {lntype}"),
                 ));
             }
-            chart.lntype = lntype;
+            chart.lntype = lntype as u32;
         } else if word == "LNOBJ" {
             chart.lnobj = if argument.is_empty() {
                 None
             } else {
-                Some(argument.to_string())
+                Some(norm_id(argument, base))
             };
         } else if word == "TITLE" {
             chart.title = if argument.is_empty() {
@@ -239,8 +230,45 @@ fn decode_bytes(data: &[u8]) -> Result<String> {
     ))
 }
 
+fn norm_id(token: &str, base: u32) -> String {
+    if base == 36 {
+        token.to_ascii_uppercase()
+    } else {
+        token.to_string()
+    }
+}
+
+fn split_command(head: &str) -> (&str, &str) {
+    match head.find([' ', '\t']) {
+        Some(idx) => (&head[..idx], head[idx + 1..].trim()),
+        None => (head, ""),
+    }
+}
+
+fn parse_int(value: &str, line_no: u32, name: &str) -> Result<i64> {
+    value
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| UrcError::new("syntax", line_no, format!("invalid {name}: {value}")))
+}
+
+fn parse_float(value: &str, line_no: u32, name: &str) -> Result<f64> {
+    let parsed = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| UrcError::new("syntax", line_no, format!("invalid {name}: {value}")))?;
+    if !parsed.is_finite() {
+        return Err(UrcError::new(
+            "syntax",
+            line_no,
+            format!("invalid {name}: {value}"),
+        ));
+    }
+    Ok(parsed)
+}
+
 fn scan_base(text: &str) -> Result<u32> {
-    for line in text.lines() {
+    for line in text.split('\n') {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() == 2 && parts[0].eq_ignore_ascii_case("#BASE") {
             let base = parts[1]
@@ -263,6 +291,41 @@ fn is_id_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
 }
 
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
+fn overlay(existing: Vec<String>, incoming: Vec<String>) -> Vec<String> {
+    if existing.is_empty() {
+        return incoming;
+    }
+    if incoming.is_empty() {
+        return existing;
+    }
+    let len_a = existing.len();
+    let len_b = incoming.len();
+    let total = len_a / gcd(len_a, len_b) * len_b;
+    let step_a = total / len_a;
+    let step_b = total / len_b;
+    let mut merged = vec!["00".to_string(); total];
+    for (idx, obj) in existing.into_iter().enumerate() {
+        if obj != "00" {
+            merged[idx * step_a] = obj;
+        }
+    }
+    for (idx, obj) in incoming.into_iter().enumerate() {
+        if obj != "00" {
+            merged[idx * step_b] = obj;
+        }
+    }
+    merged
+}
+
 fn add_message(
     chart: &mut BmsChart,
     measure: i64,
@@ -271,18 +334,12 @@ fn add_message(
     line_no: u32,
 ) -> Result<()> {
     if channel == "02" {
-        let rate = payload.trim().parse::<f64>().map_err(|_| {
-            UrcError::new(
-                "syntax",
-                line_no,
-                format!("invalid measure length: {payload}"),
-            )
-        })?;
-        if rate < 0.0 {
+        let rate = parse_float(payload, line_no, "measure length")?;
+        if rate <= 0.0 {
             return Err(UrcError::new(
                 "syntax",
                 line_no,
-                format!("negative measure length: {payload}"),
+                format!("non-positive measure length: {payload}"),
             ));
         }
         chart.rates.insert(measure, rate);
@@ -296,20 +353,28 @@ fn add_message(
             format!("malformed object list: \"{payload}\""),
         ));
     }
-
-    let mut ids = Vec::new();
-    let bytes = payload.as_bytes();
-    for i in (0..bytes.len()).step_by(2) {
-        ids.push(std::str::from_utf8(&bytes[i..i + 2]).unwrap().to_string());
+    if payload.is_empty() {
+        return Ok(());
     }
 
-    chart
-        .measures
-        .entry(measure)
-        .or_default()
-        .entry(channel.to_string())
-        .or_default()
-        .extend(ids);
+    let mut ids = Vec::with_capacity(payload.len() / 2);
+    let bytes = payload.as_bytes();
+    for i in (0..bytes.len()).step_by(2) {
+        let token = std::str::from_utf8(&bytes[i..i + 2]).unwrap();
+        let id = if channel == "03" {
+            token.to_ascii_uppercase()
+        } else {
+            norm_id(token, chart.base)
+        };
+        ids.push(id);
+    }
+
+    let measure_map = chart.measures.entry(measure).or_default();
+    if let Some(existing) = measure_map.remove(channel) {
+        measure_map.insert(channel.to_string(), overlay(existing, ids));
+    } else {
+        measure_map.insert(channel.to_string(), ids);
+    }
 
     Ok(())
 }

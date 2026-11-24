@@ -19,7 +19,9 @@ export function rows(beats: number): number {
  */
 export function warpIntervals(warpSegs: Array<[number, number]>): Array<[number, number]> {
 	const spans = warpSegs
+		.filter(([, length]) => length > 0)
 		.map(([beat, length]) => [rows(beat), rows(beat) + rows(length)] as [number, number])
+		.filter(([start, dest]) => dest > start)
 		.sort((left, right) => left[0] - right[0]);
 	const merged: Array<[number, number]> = [];
 	for (const [start, dest] of spans) {
@@ -40,14 +42,15 @@ export function filterNotes(notes: SmNote[], intervals: Array<[number, number]>)
 	for (const note of notes) {
 		if (intervals.some(([start, dest]) => start < note.row && note.row < dest))
 			continue;
-		if (note.tailRow !== null)
+		let tailRow = note.tailRow;
+		if (tailRow !== null)
 			for (const [start, dest] of intervals)
-				if (start < note.tailRow && note.tailRow < dest) {
-					note.tailRow = start;
+				if (start < tailRow && tailRow < dest) {
+					tailRow = start;
 					break;
 				}
 
-		kept.push(note);
+		kept.push({ ...note, tailRow });
 	}
 	return kept;
 }
@@ -88,13 +91,14 @@ export function preprocess(timing: Timing): Segments {
 	const outBpm: Array<[number, number]> = [];
 	const outStop: Array<[number, number]> = [];
 	const outWarp: Array<[number, number]> = [];
-	if (bpm > 0 && bpm <= FAST_BPM_WARP)
-		outBpm.push([0, bpm]);
-
 	let prevbeat = 0;
 	let timeofs = 0;
 	let warpstart = -1;
 	let prewarpbpm = 0;
+	if (bpm > 0 && bpm <= FAST_BPM_WARP)
+		outBpm.push([0, bpm]);
+	else
+		warpstart = 0;
 	let ibpm = index;
 	let istop = 0;
 	while (ibpm < bpms.length || istop < stops.length) {
@@ -154,9 +158,12 @@ export function preprocess(timing: Timing): Segments {
 		const neverEnds = bpm < 0 || bpm > FAST_BPM_WARP;
 		const warpend = neverEnds ? 99999999 : prevbeat - (timeofs * bpm) / 60;
 		outWarp.push([warpstart, warpend - warpstart]);
-		if (bpm !== prewarpbpm)
+		if (!neverEnds && bpm !== prewarpbpm)
 			outBpm.push([warpstart, bpm]);
 	}
+
+	if (outBpm.length === 0)
+		throw new UrcError("syntax", 1, "no positive BPM in simfile");
 
 	return [offset, outBpm, outStop, outWarp];
 }

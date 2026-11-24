@@ -21,13 +21,16 @@ pub(crate) fn first_downbeat_after(bpm_points: &[(i64, f64, u64, u64)], time_ms:
     let mut points = bpm_points.to_vec();
     points.sort_by_key(|point| point.0);
 
-    for (index, &(time, bpm, beats, _note_value)) in points.iter().enumerate() {
+    for (index, &(time, bpm, beats, note_value)) in points.iter().enumerate() {
         let next_time = points.get(index + 1).map_or(i64::MAX, |point| point.0);
         if time_ms <= time {
             return Some(round_ms(time as f64));
         }
         if time_ms < next_time {
-            let measure_ms = beats as f64 * 60000.0 / bpm;
+            if bpm <= 0.0 || beats == 0 || note_value == 0 {
+                continue;
+            }
+            let measure_ms = beats as f64 * (4.0 / note_value as f64) * 60000.0 / bpm;
             if measure_ms <= 0.0 {
                 continue;
             }

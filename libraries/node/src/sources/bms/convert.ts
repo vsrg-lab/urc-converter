@@ -10,7 +10,7 @@ import {
 	buildNotes,
 	channelKind,
 	detectMode,
-	idValue
+	hexBpm
 } from "./channels.js";
 import type { BmsChart } from "./model.js";
 
@@ -39,6 +39,7 @@ export function convertBms(chart: BmsChart): Chart {
 	const entries: Entry[] = [[0.0, 0, "bpm", chart.bpm]];
 	const objects: Array<[number, string, string]> = [];
 	const used = new Set<string>();
+	const lnChannels = new Set<string>();
 
 	for (let m = 0; m <= maxMeasure; m++) {
 		const rate = chart.rates.get(m) ?? 1.0;
@@ -53,7 +54,8 @@ export function convertBms(chart: BmsChart): Chart {
 		if (!measureMap)
 			continue;
 
-		for (const [channel, ids] of measureMap.entries())
+		const sortedChannels = [...measureMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+		for (const [channel, ids] of sortedChannels)
 			for (let idx = 0; idx < ids.length; idx++) {
 				const obj = ids[idx];
 				const y = boundaries[m] + (idx / ids.length) * rate;
@@ -61,13 +63,14 @@ export function convertBms(chart: BmsChart): Chart {
 				if (SYSTEM_CHANNELS.has(channel)) {
 					if (obj === "00")
 						continue;
-					if (channel === "03") {
-						const digits = idValue(obj, chart.base);
-						entries.push([y, 0, "bpm", Math.floor(digits / 36) * 16 + (digits % 36)]);
-					} else if (channel === "08") {
+					if (channel === "03")
+						entries.push([y, 0, "bpm", hexBpm(obj)]);
+					else if (channel === "08") {
 						const bpmVal = chart.bpmDefs.get(obj);
 						if (bpmVal === undefined)
 							throw new UrcError("syntax", 1, `undefined #BPM${obj}`);
+						if (bpmVal <= 0)
+							throw new UrcError("syntax", 1, `non-positive #BPM${obj}: ${bpmVal}`);
 						entries.push([y, 0, "bpm", bpmVal]);
 					} else if (channel === "09") {
 						const stopVal = chart.stopDefs.get(obj);
@@ -86,6 +89,8 @@ export function convertBms(chart: BmsChart): Chart {
 				const kind = channelKind(channel);
 				if (kind === null)
 					continue;
+				if (kind === "ln")
+					lnChannels.add(channel);
 				if (obj !== "00")
 					used.add(`${SIDE_OF[channel[0]]}:${channel[1]}`);
 				if (obj === "00" && kind !== "ln")
@@ -94,6 +99,17 @@ export function convertBms(chart: BmsChart): Chart {
 				entries.push([y, 4, "object", objects.length - 1]);
 			}
 	}
+
+	if (chart.lntype === 2 && lnChannels.size > 0)
+		for (const channel of [...lnChannels].sort()) {
+			for (let m = 0; m <= maxMeasure; m++)
+				if (!chart.measures.get(m)?.has(channel)) {
+					objects.push([boundaries[m], channel, "00"]);
+					entries.push([boundaries[m], 4, "object", objects.length - 1]);
+				}
+			objects.push([boundaries[maxMeasure + 1], channel, "00"]);
+			entries.push([boundaries[maxMeasure + 1], 4, "object", objects.length - 1]);
+		}
 
 	for (const y of boundaries)
 		entries.push([y, 5, "anchor", 0]);
@@ -136,7 +152,7 @@ export function convertBms(chart: BmsChart): Chart {
 			else if (kind === "meter")
 				newBeats = val;
 			else if (kind === "stop")
-				pendingStop = (MEASURE_US * val) / newBpm!;
+				pendingStop += (MEASURE_US * val) / newBpm!;
 			else if (kind === "scroll")
 				scroll = val;
 			else if (kind === "anchor")
@@ -206,4 +222,3 @@ export function convertBms(chart: BmsChart): Chart {
 		notes: urcNotes
 	};
 }
-

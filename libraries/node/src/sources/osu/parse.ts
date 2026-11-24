@@ -2,6 +2,7 @@
  * Parser for .osu text.
  */
 import { UrcError } from "../../error.js";
+import { roundMs } from "../shared.js";
 import type { OsuBeatmap, OsuHitObject, OsuTimingPoint } from "./model.js";
 
 const METADATA_FIELDS: Record<string, "title" | "titleUnicode" | "artist" | "artistUnicode" | "creator" | "version"> = {
@@ -18,7 +19,7 @@ const METADATA_FIELDS: Record<string, "title" | "titleUnicode" | "artist" | "art
  */
 export function parseOsu(text: string): OsuBeatmap {
 	const beatmap: OsuBeatmap = {
-		mode: 3,
+		mode: 0,
 		title: null,
 		titleUnicode: null,
 		artist: null,
@@ -31,14 +32,14 @@ export function parseOsu(text: string): OsuBeatmap {
 		hitObjects: []
 	};
 	let section: string | null = null;
-	const body = text.startsWith("﻿") ? text.slice(1) : text;
+	const body = text.replace(/^\uFEFF+/, "");
 
 	for (const [offset, raw] of body.replace(/\r\n?/g, "\n").split("\n").entries()) {
 		const lineNo = offset + 1;
 		const line = raw.trim();
 
 		if (line.startsWith("[") && line.endsWith("]")) {
-			section = line.slice(1, -1);
+			section = line.slice(1, -1).trim();
 			continue;
 		}
 		if (line === "" || line.startsWith("//") || section === null)
@@ -70,7 +71,6 @@ function parseGeneral(beatmap: OsuBeatmap, line: string, lineNo: number): void {
 	const [key, value] = splitField(line);
 	if (key !== undefined && value !== undefined && key === "Mode")
 		beatmap.mode = toInt(value, lineNo, "Mode");
-
 }
 
 function parseMetadata(beatmap: OsuBeatmap, line: string): void {
@@ -78,7 +78,6 @@ function parseMetadata(beatmap: OsuBeatmap, line: string): void {
 	const field = key === undefined || value === undefined ? undefined : METADATA_FIELDS[key];
 	if (key !== undefined && value !== undefined && field !== undefined)
 		beatmap[field] = value;
-
 }
 
 function parseDifficulty(beatmap: OsuBeatmap, line: string, lineNo: number): void {
@@ -90,7 +89,6 @@ function parseDifficulty(beatmap: OsuBeatmap, line: string, lineNo: number): voi
 		beatmap.circleSize = toFloat(value, lineNo, "CircleSize");
 	else if (key === "OverallDifficulty")
 		beatmap.overallDifficulty = toFloat(value, lineNo, "OverallDifficulty");
-
 }
 
 function parseTimingPoint(line: string, lineNo: number): OsuTimingPoint {
@@ -98,10 +96,12 @@ function parseTimingPoint(line: string, lineNo: number): OsuTimingPoint {
 	if (fields.length < 2)
 		throw new UrcError("syntax", lineNo, `timing point needs at least 2 fields: ${line}`);
 
+	const rawMeter = fields.length > 2 && fields[2] !== "" ? toInt(fields[2], lineNo, "meter") : 4;
+	const meter = rawMeter > 0 ? rawMeter : 4;
 	return {
 		time: toInt(fields[0], lineNo, "timing time"),
 		beatLength: toFloat(fields[1], lineNo, "beat length"),
-		meter: fields.length > 2 && fields[2] !== "" ? toInt(fields[2], lineNo, "meter") : 4,
+		meter,
 		uninherited:
 			fields.length > 6 && fields[6] !== "" ? toInt(fields[6], lineNo, "uninherited") !== 0 : true
 	};
@@ -140,8 +140,7 @@ function splitField(line: string): [string | undefined, string | undefined] {
 }
 
 function toInt(token: string, lineNo: number, label: string): number {
-	const value = toFloat(token, lineNo, label);
-	return Math.round(value);
+	return roundMs(toFloat(token, lineNo, label));
 }
 
 function toFloat(token: string, lineNo: number, label: string): number {
@@ -149,7 +148,7 @@ function toFloat(token: string, lineNo: number, label: string): number {
 		throw new UrcError("syntax", lineNo, `invalid ${label}: ${token}`);
 
 	const value = Number(token);
-	if (Number.isNaN(value))
+	if (!Number.isFinite(value))
 		throw new UrcError("syntax", lineNo, `invalid ${label}: ${token}`);
 
 	return value;

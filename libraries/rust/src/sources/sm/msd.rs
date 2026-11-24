@@ -15,7 +15,7 @@ pub(crate) fn tokenize(text: &str) -> Vec<Vec<String>> {
     let n = chars.len();
     while i < n {
         if i + 1 < n && chars[i] == '/' && chars[i + 1] == '/' {
-            while i < n && chars[i] != '\n' {
+            while i < n && chars[i] != '\n' && chars[i] != '\r' {
                 i += 1;
             }
             continue;
@@ -81,6 +81,7 @@ pub(crate) fn tokenize(text: &str) -> Vec<Vec<String>> {
 
     if reading {
         params.push(current);
+        values.push(params);
     }
     values
 }
@@ -140,10 +141,16 @@ pub(crate) fn parse_float(token: &str) -> Result<f64> {
         && text
             .bytes()
             .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'));
-    if !valid || text.parse::<f64>().is_err() {
+    if !valid {
         return Err(UrcError::new("syntax", 1, format!("invalid number: {token}")));
     }
-    Ok(text.parse::<f64>().unwrap())
+    let parsed = text
+        .parse::<f64>()
+        .map_err(|_| UrcError::new("syntax", 1, format!("invalid number: {token}")))?;
+    if !parsed.is_finite() {
+        return Err(UrcError::new("syntax", 1, format!("invalid number: {token}")));
+    }
+    Ok(parsed)
 }
 
 pub(crate) fn parse_int(token: &str) -> Result<i64> {

@@ -46,7 +46,12 @@ type Entry = [number, number, string, unknown];
 
 function convertChart(simfile: SmFile, chart: SmChart): Chart {
 	const lanes = resolveLanes(chart.stepsType);
-	const timing = chart.timing ?? simfile.timing;
+	const timing: Timing =
+		chart.timing === null
+			? simfile.timing
+			: chart.timing.bpms.length === 0
+				? { ...chart.timing, bpms: simfile.timing.bpms }
+				: chart.timing;
 	const [offset, bpmSegs, stopSegs, warpSegs] = preprocess(timing);
 	const intervals = warpIntervals([...warpSegs, ...timing.warps]);
 	const notes = filterNotes(chart.notes, intervals);
@@ -74,8 +79,12 @@ function convertChart(simfile: SmFile, chart: SmChart): Chart {
 	for (const entry of entries)
 		if (entry[0] > maxRow)
 			maxRow = entry[0];
-	for (let row = 0; row < maxRow + MEASURE_ROWS; row += MEASURE_ROWS)
+	const anchorLimit = maxRow + MEASURE_ROWS;
+	for (let row = 0; row < anchorLimit; row += MEASURE_ROWS)
 		entries.push([row, 2, "anchor", null]);
+	for (const [, dest] of intervals)
+		if (dest <= anchorLimit)
+			entries.push([dest, 0, "warp_end", null]);
 
 	const headTimes: number[] = new Array<number>(notes.length).fill(0);
 	const tailTimes = new Map<number, number>();
@@ -116,6 +125,8 @@ function convertChart(simfile: SmFile, chart: SmChart): Chart {
 					}
 					break;
 				}
+				case "warp_end":
+					break;
 				case "delay":
 					seconds += value as number;
 					break;

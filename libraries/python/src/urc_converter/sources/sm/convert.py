@@ -44,7 +44,21 @@ def convert_sm(simfile: SmFile) -> list[Chart]:
 
 def _convert_chart(simfile: SmFile, chart: SmChart) -> Chart:
 	lanes = resolve_lanes(chart.steps_type)
-	timing = chart.timing if chart.timing is not None else simfile.timing
+	if chart.timing is None:
+		timing = simfile.timing
+	elif not chart.timing.bpms:
+		timing = Timing(
+			offset=chart.timing.offset,
+			bpms=simfile.timing.bpms,
+			stops=chart.timing.stops,
+			delays=chart.timing.delays,
+			warps=chart.timing.warps,
+			scrolls=chart.timing.scrolls,
+			timesigs=chart.timing.timesigs,
+			fakes=chart.timing.fakes,
+		)
+	else:
+		timing = chart.timing
 	offset, bpm_segs, stop_segs, warp_segs = preprocess(timing)
 	intervals = warp_intervals(warp_segs + timing.warps)
 	notes = filter_notes(chart.notes, intervals)
@@ -67,9 +81,11 @@ def _convert_chart(simfile: SmFile, chart: SmChart) -> Chart:
 	for beat, ratio in timing.scrolls:
 		entries.append((rows(beat), 6, "scroll", ratio))
 	max_row = max((entry[0] for entry in entries), default=0)
-	entries.extend(
-		(row, 2, "anchor", None) for row in range(0, max_row + _MEASURE_ROWS, _MEASURE_ROWS)
-	)
+	anchor_limit = max_row + _MEASURE_ROWS
+	entries.extend((row, 2, "anchor", None) for row in range(0, anchor_limit, _MEASURE_ROWS))
+	for _start, dest in intervals:
+		if dest <= anchor_limit:
+			entries.append((dest, 0, "warp_end", None))
 
 	head_times: list[float] = [0.0] * len(notes)
 	tail_times: dict[int, float] = {}
@@ -101,6 +117,8 @@ def _convert_chart(simfile: SmFile, chart: SmChart) -> Chart:
 				else:
 					warping = True
 					warp_dest = value
+			elif kind == "warp_end":
+				pass
 			elif kind == "delay":
 				seconds += value
 			elif kind == "note":

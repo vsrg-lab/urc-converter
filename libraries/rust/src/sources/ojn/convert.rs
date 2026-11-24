@@ -81,7 +81,13 @@ fn convert_chart(file: &OjnFile, difficulty: &OjnDifficulty) -> Result<Chart> {
 
         if event.channel == 0 {
             fraction = event.value;
-            if let Some(approx) = fraction_meter(event.value)
+            if (event.value - 1.0).abs() <= METER_TOLERANCE {
+                if meter != (4, 4) {
+                    meter = (4, 4);
+                    meter_dirty = false;
+                    bpm_points.push((round_ms(time), canonical_bpm(bpm), 4, 4));
+                }
+            } else if let Some(approx) = fraction_meter(event.value)
                 && approx != meter
             {
                 meter = approx;
@@ -198,8 +204,15 @@ fn add_note(
 /// are enumerated explicitly instead of relying on formatter-specific
 /// tie-breaking, so every language agrees.
 fn canonical_bpm(value: f64) -> f64 {
+    if !value.is_finite() || value >= 1e15 {
+        return value;
+    }
     for (precision, &scale) in SCALES.iter().enumerate() {
-        let base = (value * scale).trunc() as i64;
+        let scaled = value * scale;
+        if scaled >= 9e15 {
+            break;
+        }
+        let base = scaled.trunc() as i64;
         for candidate in [base, base + 1, base - 1] {
             let text = decimal(candidate, precision);
             if let Ok(parsed) = text.parse::<f64>()

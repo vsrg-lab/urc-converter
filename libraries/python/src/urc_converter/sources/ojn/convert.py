@@ -55,11 +55,17 @@ def _convert_chart(file: OjnFile, difficulty: OjnDifficulty) -> Chart:
 
 		if event.channel == 0:
 			fraction = event.value
-			approx = _fraction_meter(event.value)
-			if approx is not None and approx != meter:
-				meter = approx
-				meter_dirty = True
-				bpm_points.append((round_ms(time), _canonical_bpm(bpm), *meter))
+			if abs(event.value - 1.0) <= _METER_TOLERANCE:
+				if meter != (4, 4):
+					meter = (4, 4)
+					meter_dirty = False
+					bpm_points.append((round_ms(time), _canonical_bpm(bpm), 4, 4))
+			else:
+				approx = _fraction_meter(event.value)
+				if approx is not None and approx != meter:
+					meter = approx
+					meter_dirty = True
+					bpm_points.append((round_ms(time), _canonical_bpm(bpm), *meter))
 		elif event.channel == 1:
 			bpm_points.append((round_ms(time), _canonical_bpm(event.value), *meter))
 			bpm = event.value
@@ -138,8 +144,13 @@ def _canonical_bpm(value: float) -> float:
 	Candidates are enumerated explicitly instead of relying on
 	formatter-specific tie-breaking, so every language agrees.
 	"""
+	if not math.isfinite(value) or value >= 1e15:
+		return value
 	for precision in range(10):
-		base = math.trunc(value * 10**precision)
+		scaled = value * 10**precision
+		if scaled >= 9e15:
+			break
+		base = math.trunc(scaled)
 		for candidate in (base, base + 1, base - 1):
 			text = _decimal(candidate, precision)
 			if _pack_f32(float(text)) == value:

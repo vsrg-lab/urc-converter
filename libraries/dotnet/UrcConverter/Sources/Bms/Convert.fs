@@ -3,6 +3,8 @@ namespace UrcConverter.Sources.Bms
 [<RequireQualifiedAccess>]
 module Convert =
 
+    open System
+    open System.Globalization
     open FsToolkit.ErrorHandling
     open UrcConverter
     open UrcConverter.Sources
@@ -11,6 +13,11 @@ module Convert =
 
     [<Literal>]
     let private MeasureUs = 240000000.0
+
+    let private hexBpm (obj: string) : Result<float, UrcError> =
+        match Int32.TryParse(obj, NumberStyles.HexNumber, CultureInfo.InvariantCulture) with
+        | true, v -> Ok(float v)
+        | false, _ -> Error(UrcError.syntax 1 $"invalid hex BPM in channel 03: \"{obj}\"")
 
     [<RequireQualifiedAccess>]
     type private EntryKind =
@@ -27,6 +34,7 @@ module Convert =
             Objects: (float * string * string) list
             ObjectCount: int
             Used: Set<int * char>
+            LnChannels: Set<string>
         }
 
     type private TimingScanState =
@@ -66,6 +74,7 @@ module Convert =
                     Objects = []
                     ObjectCount = 0
                     Used = Set.empty
+                    LnChannels = Set.empty
                 }
 
             let rec scanIds
@@ -88,17 +97,19 @@ module Convert =
                         else
                             match channel with
                             | "03" ->
-                                let digits = idValue obj chart.Base
-                                let bpmVal = float ((digits / 36) * 16 + (digits % 36))
+                                match hexBpm obj with
+                                | Ok bpmVal ->
+                                    let nextAcc =
+                                        { iAcc with
+                                            Entries = (y, 0, EntryKind.Bpm bpmVal) :: iAcc.Entries
+                                        }
 
-                                let nextAcc =
-                                    { iAcc with
-                                        Entries = (y, 0, EntryKind.Bpm bpmVal) :: iAcc.Entries
-                                    }
-
-                                scanIds measureBoundary rate channel totalIds (idx + 1) nextAcc rest
+                                    scanIds measureBoundary rate channel totalIds (idx + 1) nextAcc rest
+                                | Error err -> Error err
                             | "08" ->
                                 match Map.tryFind obj chart.BpmDefs with
+                                | Some bpmVal when bpmVal <= 0.0 ->
+                                    Error(UrcError.syntax 1 $"non-positive #BPM{obj}: {bpmVal}")
                                 | Some bpmVal ->
                                     let nextAcc =
                                         { iAcc with
@@ -131,6 +142,12 @@ module Convert =
                         match channelKind channel with
                         | None -> scanIds measureBoundary rate channel totalIds (idx + 1) iAcc rest
                         | Some kind ->
+                            let lnChannels =
+                                if kind = ChannelKind.LongNote then
+                                    Set.add channel iAcc.LnChannels
+                                else
+                                    iAcc.LnChannels
+
                             let used =
                                 if obj <> "00" then
                                     Set.add (sideOf channel[0], channel[1]) iAcc.Used
@@ -144,11 +161,19 @@ module Convert =
                                         Objects = (y, channel, obj) :: iAcc.Objects
                                         ObjectCount = iAcc.ObjectCount + 1
                                         Used = used
+                                        LnChannels = lnChannels
                                     }
 
                                 scanIds measureBoundary rate channel totalIds (idx + 1) nextAcc rest
                             else
-                                scanIds measureBoundary rate channel totalIds (idx + 1) { iAcc with Used = used } rest
+                                scanIds
+                                    measureBoundary
+                                    rate
+                                    channel
+                                    totalIds
+                                    (idx + 1)
+                                    { iAcc with Used = used; LnChannels = lnChannels }
+                                    rest
 
             let rec scanChannels
                 (measureBoundary: float)
@@ -167,7 +192,7 @@ module Convert =
 
             let rec scanMeasures (acc: ScanAcc) (m: int) : Result<ScanAcc, UrcError> =
                 if m > maxMeasure then
-                    Ok { acc with Objects = List.rev acc.Objects }
+                    Ok acc
                 else
                     let rate = Map.tryFind m chart.Rates |> Option.defaultValue 1.0
                     let prevRate = Map.tryFind (m - 1) chart.Rates |> Option.defaultValue 1.0
@@ -192,12 +217,52 @@ module Convert =
                         | Ok nextAcc -> scanMeasures nextAcc (m + 1)
                         | Error err -> Error err
 
-            let! scanned = scanMeasures initialAcc 0
+            let! scannedRaw = scanMeasures initialAcc 0
+
+            let scanned =
+                let withLntype2 =
+                    if chart.LnType = 2 && not (Set.isEmpty scannedRaw.LnChannels) then
+                        (scannedRaw, scannedRaw.LnChannels)
+                        ||> Set.fold (fun acc channel ->
+                            let accMid =
+                                (acc, [ 0 .. maxMeasure ])
+                                ||> List.fold (fun a m ->
+                                    let present =
+                                        Map.tryFind m chart.Measures
+                                        |> Option.map (Map.containsKey channel)
+                                        |> Option.defaultValue false
+
+                                    if present then
+                                        a
+                                    else
+                                        let y = boundaries[m]
+
+                                        { a with
+                                            Entries = (y, 4, EntryKind.Object a.ObjectCount) :: a.Entries
+                                            Objects = (y, channel, "00") :: a.Objects
+                                            ObjectCount = a.ObjectCount + 1
+                                        })
+
+                            let endY = boundaries[maxMeasure + 1]
+
+                            { accMid with
+                                Entries = (endY, 4, EntryKind.Object accMid.ObjectCount) :: accMid.Entries
+                                Objects = (endY, channel, "00") :: accMid.Objects
+                                ObjectCount = accMid.ObjectCount + 1
+                            })
+                    else
+                        scannedRaw
+
+                { withLntype2 with
+                    Entries = List.rev withLntype2.Entries
+                    Objects = List.rev withLntype2.Objects
+                }
+
             let mode = detectMode chart.Pms scanned.Used
 
             let sortedEntries =
-                (boundaries |> Seq.map (fun y -> y, 5, EntryKind.Anchor) |> List.ofSeq)
-                @ scanned.Entries
+                scanned.Entries
+                @ (boundaries |> Seq.map (fun y -> y, 5, EntryKind.Anchor) |> List.ofSeq)
                 |> List.sortBy (fun (y, order, _) -> y, order)
 
             let groupedEntries = sortedEntries |> List.groupBy (fun (y, _, _) -> y)
@@ -245,7 +310,7 @@ module Convert =
                                 | Some b -> MeasureUs * v / b
                                 | None -> 0.0
 
-                            foldGroupEvents nextBpm nextBeats stopTime scroll anchors timed rest
+                            foldGroupEvents nextBpm nextBeats (pendingStop + stopTime) scroll anchors timed rest
                         | EntryKind.Scroll v ->
                             foldGroupEvents nextBpm nextBeats pendingStop (Some v) anchors timed rest
                         | EntryKind.Object idx ->

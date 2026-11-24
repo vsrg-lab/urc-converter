@@ -16,7 +16,8 @@ interface RawTiming {
  * Rounds to integer milliseconds, half away from zero.
  */
 export function roundMs(value: number): number {
-	return value >= 0 ? Math.floor(value + 0.5) : Math.ceil(value - 0.5);
+	const rounded = value >= 0 ? Math.floor(value + 0.5) : Math.ceil(value - 0.5);
+	return rounded === 0 ? 0 : rounded;
 }
 
 /**
@@ -29,12 +30,14 @@ export function firstDownbeatAfter(
 ): number | null {
 	const points = [...bpmPoints].sort((left, right) => left[0] - right[0]);
 	for (let index = 0; index < points.length; index++) {
-		const [time, bpm, beats] = points[index];
+		const [time, bpm, beats, noteValue] = points[index];
 		const nextTime = index + 1 < points.length ? points[index + 1][0] : null;
 		if (timeMs <= time)
 			return roundMs(time);
 		if (nextTime === null || timeMs < nextTime) {
-			const measureMs = (beats * 60000) / bpm;
+			if (bpm <= 0 || beats <= 0 || noteValue <= 0)
+				continue;
+			const measureMs = (beats * (4 / noteValue) * 60000) / bpm;
 			if (measureMs <= 0)
 				continue;
 			const anchor = time + Math.ceil((timeMs - time) / measureMs - 1e-9) * measureMs;

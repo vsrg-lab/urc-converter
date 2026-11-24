@@ -1,19 +1,5 @@
 use std::collections::HashSet;
 
-pub fn id_value(text: &str, base: u32) -> u64 {
-    fn digit(c: char) -> u64 {
-        if c.is_ascii_digit() {
-            (c as u64) - ('0' as u64)
-        } else if c.is_ascii_uppercase() {
-            (c as u64) - ('A' as u64) + 10
-        } else {
-            (c as u64) - ('a' as u64) + 36
-        }
-    }
-    let chars: Vec<char> = text.chars().collect();
-    digit(chars[0]) * (base as u64) + digit(chars[1])
-}
-
 pub fn channel_kind(channel: &str) -> Option<&'static str> {
     if channel.len() != 2 {
         return None;
@@ -203,62 +189,81 @@ pub fn build_notes(
     objects: &[(f64, String, String)],
     timed: &[f64],
 ) -> crate::error::Result<Vec<(i64, u32, crate::model::NoteType)>> {
-    let mut streams: std::collections::BTreeMap<String, Vec<(f64, String)>> = std::collections::BTreeMap::new();
-    for (index, (_y, channel, obj)) in objects.iter().enumerate() {
+    let mut streams: std::collections::BTreeMap<String, Vec<(f64, f64, String)>> =
+        std::collections::BTreeMap::new();
+    for (index, (y, channel, obj)) in objects.iter().enumerate() {
         streams
             .entry(channel.clone())
             .or_default()
-            .push((timed[index], obj.clone()));
+            .push((*y, timed[index], obj.clone()));
     }
 
     let mut notes = Vec::new();
-    for (channel, stream) in &streams {
-        let lane = match get_lane(mode, channel) {
+    for (channel, mut raw_stream) in streams {
+        raw_stream.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let stream: Vec<(f64, String)> = raw_stream
+            .into_iter()
+            .map(|(_y, time, obj)| (time, obj))
+            .collect();
+        let lane = match get_lane(mode, &channel) {
             Some(l) => l,
             None => continue,
         };
-        let kind = match channel_kind(channel) {
+        let kind = match channel_kind(&channel) {
             Some(k) => k,
             None => continue,
         };
 
         match kind {
             "mine" => {
-                for (time, _) in stream {
-                    notes.push((crate::sources::shared::round_ms(time / 1000.0), lane, crate::model::NoteType::M));
+                for (time, _) in &stream {
+                    notes.push((
+                        crate::sources::shared::round_ms(time / 1000.0),
+                        lane,
+                        crate::model::NoteType::M,
+                    ));
                 }
             }
             "ln" => {
-                pair_long_notes(chart, stream, lane, &mut notes)?;
+                pair_long_notes(chart, &stream, lane, &mut notes)?;
             }
             _ => {
                 let mut pending: Option<f64> = None;
-                for (time, obj) in stream {
+                for (time, obj) in &stream {
                     if let Some(ref lnobj) = chart.lnobj
                         && obj == lnobj
-                        && let Some(p) = pending
                     {
-                        let ls_ms = crate::sources::shared::round_ms(p / 1000.0);
-                        let le_ms = crate::sources::shared::round_ms(time / 1000.0);
-                        if le_ms <= ls_ms {
-                            return Err(crate::error::UrcError::new(
-                                crate::strings::ZERO_LENGTH_HOLD,
-                                1,
-                                format!("zero-length hold on lane {lane} at {ls_ms}ms"),
-                            ));
+                        if let Some(p) = pending {
+                            let ls_ms = crate::sources::shared::round_ms(p / 1000.0);
+                            let le_ms = crate::sources::shared::round_ms(time / 1000.0);
+                            if le_ms <= ls_ms {
+                                return Err(crate::error::UrcError::new(
+                                    crate::strings::ZERO_LENGTH_HOLD,
+                                    1,
+                                    format!("zero-length hold on lane {lane} at {ls_ms}ms"),
+                                ));
+                            }
+                            notes.push((ls_ms, lane, crate::model::NoteType::Ls));
+                            notes.push((le_ms, lane, crate::model::NoteType::Le));
+                            pending = None;
                         }
-                        notes.push((ls_ms, lane, crate::model::NoteType::Ls));
-                        notes.push((le_ms, lane, crate::model::NoteType::Le));
-                        pending = None;
                     } else {
                         if let Some(p) = pending {
-                            notes.push((crate::sources::shared::round_ms(p / 1000.0), lane, crate::model::NoteType::N));
+                            notes.push((
+                                crate::sources::shared::round_ms(p / 1000.0),
+                                lane,
+                                crate::model::NoteType::N,
+                            ));
                         }
                         pending = if obj != "00" { Some(*time) } else { None };
                     }
                 }
                 if let Some(p) = pending {
-                    notes.push((crate::sources::shared::round_ms(p / 1000.0), lane, crate::model::NoteType::N));
+                    notes.push((
+                        crate::sources::shared::round_ms(p / 1000.0),
+                        lane,
+                        crate::model::NoteType::N,
+                    ));
                 }
             }
         }

@@ -8,24 +8,26 @@ module internal Preprocess =
     [<Literal>]
     let FastBpmWarp = 9999999.0
 
-    let rowsOf (beats: float) : int =
+    let rowsOf (beats: float) : int64 =
         let value = beats * 48.0
 
         if value >= 0.0 then
-            int (value + 0.5)
+            int64 (value + 0.5)
         else
-            int (value - 0.5)
+            int64 (value - 0.5)
 
     /// Merges warp segments into [start, dest) row intervals; overlapping
     /// warps adopt the greater destination (StepMania semantics).
-    let warpIntervals (warpSegs: (float * float) list) : (int * int) list =
+    let warpIntervals (warpSegs: (float * float) list) : (int64 * int64) list =
         warpSegs
+        |> List.filter (fun (_, length) -> length > 0.0)
         |> List.map (fun (beat, length) ->
             let start = rowsOf beat
             start, start + rowsOf length)
+        |> List.filter (fun (start, dest) -> dest > start)
         |> List.sortBy fst
         |> List.fold
-            (fun (merged: (int * int) list) (start, dest) ->
+            (fun (merged: (int64 * int64) list) (start, dest) ->
                 match merged with
                 | (lastStart, lastDest) :: tail when start < lastDest -> (lastStart, max lastDest dest) :: tail
                 | _ -> (start, dest) :: merged)
@@ -34,17 +36,21 @@ module internal Preprocess =
 
     /// Drops notes strictly inside a warp and truncates tails that end inside
     /// one to the warp start row.
-    let filterNotes (notes: SmNote list) (intervals: (int * int) list) : SmNote list =
+    let filterNotes (notes: SmNote list) (intervals: (int64 * int64) list) : SmNote list =
         notes
         |> List.filter (fun note ->
+            let noteRow = int64 note.Row
+
             intervals
-            |> List.exists (fun (start, dest) -> start < note.Row && note.Row < dest)
+            |> List.exists (fun (start, dest) -> start < noteRow && noteRow < dest)
             |> not)
         |> List.map (fun note ->
             match note.TailRow with
             | Some tailRow ->
-                match intervals |> List.tryFind (fun (start, dest) -> start < tailRow && tailRow < dest) with
-                | Some(start, _) -> { note with TailRow = Some start }
+                let tailRow64 = int64 tailRow
+
+                match intervals |> List.tryFind (fun (start, dest) -> start < tailRow64 && tailRow64 < dest) with
+                | Some(start, _) -> { note with TailRow = Some(int start) }
                 | None -> note
             | None -> note)
 
@@ -91,15 +97,12 @@ module internal Preprocess =
         let initialBpm, bpmRest =
             let beforeZero, afterZero = bpms |> List.partition (fun (beat, _) -> beat <= 0.0)
 
-            let bpm =
-                match List.tryLast beforeZero with
-                | Some(_, value) -> value
-                | None ->
-                    match afterZero with
-                    | (_, value) :: _ -> value
-                    | [] -> 0.0
-
-            bpm, afterZero
+            match List.tryLast beforeZero with
+            | Some(_, value) -> value, afterZero
+            | None ->
+                match afterZero with
+                | (_, value) :: rest -> value, rest
+                | [] -> 0.0, []
 
         if initialBpm = 0.0 then
             Error(UrcError.syntax 1 "no BPM in simfile")
@@ -126,15 +129,26 @@ module internal Preprocess =
                     else 1)
 
             let initialState =
-                {
-                    PrevBeat = 0.0
-                    Bpm = initialBpm
-                    TimeOfs = 0.0
-                    Warp = WarpState.NotWarping
-                    OutBpm = if initialBpm > 0.0 && initialBpm <= FastBpmWarp then [ 0.0, initialBpm ] else []
-                    OutStop = []
-                    OutWarp = []
-                }
+                if initialBpm > 0.0 && initialBpm <= FastBpmWarp then
+                    {
+                        PrevBeat = 0.0
+                        Bpm = initialBpm
+                        TimeOfs = 0.0
+                        Warp = WarpState.NotWarping
+                        OutBpm = [ 0.0, initialBpm ]
+                        OutStop = []
+                        OutWarp = []
+                    }
+                else
+                    {
+                        PrevBeat = 0.0
+                        Bpm = initialBpm
+                        TimeOfs = 0.0
+                        Warp = WarpState.Warping(0.0, 0.0)
+                        OutBpm = []
+                        OutStop = []
+                        OutWarp = []
+                    }
 
             let folder (state: PreprocessState) (event: TimingEvent) =
                 let beat =
@@ -242,7 +256,7 @@ module internal Preprocess =
                     let nextOutWarp = (warpStart, warpEnd - warpStart) :: finalState.OutWarp
 
                     let nextOutBpm =
-                        if finalState.Bpm <> preWarpBpm then
+                        if not neverEnds && finalState.Bpm <> preWarpBpm then
                             (warpStart, finalState.Bpm) :: finalState.OutBpm
                         else
                             finalState.OutBpm
@@ -250,4 +264,7 @@ module internal Preprocess =
                     nextOutBpm, nextOutWarp
                 | WarpState.NotWarping -> finalState.OutBpm, finalState.OutWarp
 
-            Ok(initialOffset, List.rev outBpm, List.rev finalState.OutStop, List.rev outWarp)
+            if List.isEmpty outBpm then
+                Error(UrcError.syntax 1 "no positive BPM in simfile")
+            else
+                Ok(initialOffset, List.rev outBpm, List.rev finalState.OutStop, List.rev outWarp)

@@ -1,6 +1,7 @@
 //! Parser for `.osu` text.
 
 use crate::error::{Result, UrcError};
+use crate::sources::shared::round_ms;
 
 use super::model::{OsuBeatmap, OsuHitObject, OsuTimingPoint};
 
@@ -8,18 +9,17 @@ use super::model::{OsuBeatmap, OsuHitObject, OsuTimingPoint};
 pub fn parse_osu(text: &str) -> Result<OsuBeatmap> {
     let mut beatmap = OsuBeatmap::default();
     let mut section: Option<String> = None;
+    let normalized = text
+        .trim_start_matches('\u{feff}')
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
 
-    for (offset, raw) in text
-        .strip_prefix('\u{feff}')
-        .unwrap_or(text)
-        .lines()
-        .enumerate()
-    {
+    for (offset, raw) in normalized.split('\n').enumerate() {
         let line_no = offset as u32 + 1;
         let line = raw.trim();
 
         if line.starts_with('[') && line.ends_with(']') {
-            section = Some(line[1..line.len() - 1].to_owned());
+            section = Some(line[1..line.len() - 1].trim().to_owned());
             continue;
         }
 
@@ -90,10 +90,11 @@ fn timing_point(line: &str, line_no: u32) -> Result<OsuTimingPoint> {
         ));
     }
 
-    let meter = match fields.get(2).filter(|field| !field.is_empty()) {
-        Some(field) => to_int(field, line_no, "meter")? as u64,
+    let raw_meter = match fields.get(2).filter(|field| !field.is_empty()) {
+        Some(field) => to_int(field, line_no, "meter")?,
         None => 4,
     };
+    let meter = if raw_meter > 0 { raw_meter as u64 } else { 4 };
     let uninherited = match fields.get(6).filter(|field| !field.is_empty()) {
         Some(field) => to_int(field, line_no, "uninherited")? != 0,
         None => true,
@@ -156,14 +157,19 @@ fn hit_object(line: &str, line_no: u32) -> Result<OsuHitObject> {
 }
 
 fn to_int(token: &str, line_no: u32, label: &str) -> Result<i64> {
-    token
-        .parse::<f64>()
-        .map(|value| value.round() as i64)
-        .map_err(|_| UrcError::new("syntax", line_no, format!("invalid {label}: {token:?}")))
+    Ok(round_ms(to_float(token, line_no, label)?))
 }
 
 fn to_float(token: &str, line_no: u32, label: &str) -> Result<f64> {
-    token
+    let value = token
         .parse::<f64>()
-        .map_err(|_| UrcError::new("syntax", line_no, format!("invalid {label}: {token:?}")))
+        .map_err(|_| UrcError::new("syntax", line_no, format!("invalid {label}: {token:?}")))?;
+    if !value.is_finite() {
+        return Err(UrcError::new(
+            "syntax",
+            line_no,
+            format!("invalid {label}: {token:?}"),
+        ));
+    }
+    Ok(value)
 }

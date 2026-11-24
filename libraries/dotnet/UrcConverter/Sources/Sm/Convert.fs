@@ -11,17 +11,18 @@ module Convert =
     open Preprocess
 
     [<Literal>]
-    let private MeasureRows = 192
+    let private MeasureRows = 192L
 
     type private Entry =
         {
-            Row: int
+            Row: int64
             Priority: int
             Kind: EntryKind
         }
 
     and private EntryKind =
-        | WarpEvent of dest: int
+        | WarpEvent of dest: int64
+        | WarpEndEvent
         | DelayEvent of seconds: float
         | NoteEvent of index: int
         | TailEvent of index: int
@@ -37,8 +38,8 @@ module Convert =
             Bpm: float option
             Meter: int * int
             Multiplier: float
-            WarpDest: int option
-            PrevRow: int option
+            WarpDest: int64 option
+            PrevRow: int64 option
             HeadTimes: Map<int, float>
             TailTimes: Map<int, float>
             BpmPoints: (int * float * int * int) list
@@ -49,7 +50,13 @@ module Convert =
     let private convertChart (simfile: SmFile) (chart: SmChart) : Result<Chart, UrcError> =
         result {
             let! lanes = Parse.resolveLanes chart.StepsType
-            let timing = chart.Timing |> Option.defaultValue simfile.Timing
+
+            let timing =
+                match chart.Timing with
+                | None -> simfile.Timing
+                | Some ct when List.isEmpty ct.Bpms -> { ct with Bpms = simfile.Timing.Bpms }
+                | Some ct -> ct
+
             let! offset, bpmSegs, stopSegs, warpSegs = preprocess timing
             let intervals = warpIntervals (warpSegs @ timing.Warps)
             let notes = filterNotes chart.Notes intervals
@@ -63,10 +70,10 @@ module Convert =
                         yield { Row = rowsOf beat; Priority = 1; Kind = DelayEvent seconds }
 
                     for index, note in List.indexed notes do
-                        yield { Row = note.Row; Priority = 2; Kind = NoteEvent index }
+                        yield { Row = int64 note.Row; Priority = 2; Kind = NoteEvent index }
 
                         match note.TailRow with
-                        | Some tailRow -> yield { Row = tailRow; Priority = 2; Kind = TailEvent index }
+                        | Some tailRow -> yield { Row = int64 tailRow; Priority = 2; Kind = TailEvent index }
                         | None -> ()
 
                     for beat, seconds in stopSegs do
@@ -82,15 +89,25 @@ module Convert =
                         yield { Row = rowsOf beat; Priority = 6; Kind = ScrollEvent ratio }
                 ]
 
-            let maxRow = entries |> List.fold (fun acc entry -> max acc entry.Row) 0
+            let maxRow = entries |> List.fold (fun acc entry -> max acc entry.Row) 0L
+            let anchorLimit = maxRow + MeasureRows
 
             let anchorEntries =
                 [
-                    for row in 0 .. MeasureRows .. maxRow + MeasureRows - 1 ->
+                    for row in 0L .. MeasureRows .. anchorLimit - 1L ->
                         { Row = row; Priority = 2; Kind = AnchorEvent }
                 ]
 
-            let entries = anchorEntries @ entries |> List.sortBy (fun entry -> entry.Row, entry.Priority)
+            let warpEndEntries =
+                [
+                    for _, dest in intervals do
+                        if dest <= anchorLimit then
+                            yield { Row = dest; Priority = 0; Kind = WarpEndEvent }
+                ]
+
+            let entries =
+                entries @ anchorEntries @ warpEndEntries
+                |> List.sortBy (fun entry -> entry.Row, entry.Priority)
 
             let initial =
                 {
@@ -107,7 +124,7 @@ module Convert =
                     Anchors = []
                 }
 
-            let walk (state: WalkState) (row: int, evts: Entry list) : WalkState =
+            let walk (state: WalkState) (row: int64, evts: Entry list) : WalkState =
                 let advanced =
                     match state.PrevRow, state.Bpm, state.WarpDest with
                     | Some prevRow, Some bpm, None ->
@@ -133,6 +150,7 @@ module Convert =
                                     | None -> dest
 
                                 { s with WarpDest = Some nextDest }
+                            | WarpEndEvent -> s
                             | DelayEvent seconds -> { s with Seconds = s.Seconds + seconds }
                             | NoteEvent index ->
                                 { s with HeadTimes = Map.add index s.Seconds s.HeadTimes }

@@ -15,9 +15,13 @@ def rows(beats: float) -> int:
 
 def warp_intervals(warp_segs: list[tuple[float, float]]) -> list[tuple[int, int]]:
 	"""Merge warp segments into [start, dest) row intervals; adopt greater dest."""
-	spans = sorted((rows(beat), rows(beat) + rows(length)) for beat, length in warp_segs)
+	spans = sorted(
+		(rows(beat), rows(beat) + rows(length)) for beat, length in warp_segs if length > 0
+	)
 	merged: list[list[int]] = []
 	for start, dest in spans:
+		if dest <= start:
+			continue
 		if merged and start < merged[-1][1]:
 			if dest > merged[-1][1]:
 				merged[-1][1] = dest
@@ -32,12 +36,13 @@ def filter_notes(notes: list[SmNote], intervals: list[tuple[int, int]]) -> list[
 	for note in notes:
 		if any(start < note.row < dest for start, dest in intervals):
 			continue
-		if note.tail_row is not None:
+		tail_row = note.tail_row
+		if tail_row is not None:
 			for start, dest in intervals:
-				if start < note.tail_row < dest:
-					note.tail_row = start
+				if start < tail_row < dest:
+					tail_row = start
 					break
-		kept.append(note)
+		kept.append(SmNote(row=note.row, track=note.track, kind=note.kind, tail_row=tail_row))
 	return kept
 
 
@@ -70,13 +75,14 @@ def preprocess(
 	out_bpm: list[tuple[float, float]] = []
 	out_stop: list[tuple[float, float]] = []
 	out_warp: list[tuple[float, float]] = []
-	if 0 < bpm <= _FAST_BPM_WARP:
-		out_bpm.append((0.0, bpm))
-
 	prevbeat = 0.0
 	timeofs = 0.0
 	warpstart = -1.0
 	prewarpbpm = 0.0
+	if 0 < bpm <= _FAST_BPM_WARP:
+		out_bpm.append((0.0, bpm))
+	else:
+		warpstart = 0.0
 	ibpm, istop = index, 0
 	while ibpm < len(bpms) or istop < len(stops):
 		change_is_bpm = istop >= len(stops) or (
@@ -128,7 +134,10 @@ def preprocess(
 		never_ends = bpm < 0 or bpm > _FAST_BPM_WARP
 		warpend = 99999999.0 if never_ends else prevbeat - (timeofs * bpm / 60.0)
 		out_warp.append((warpstart, warpend - warpstart))
-		if bpm != prewarpbpm:
+		if not never_ends and bpm != prewarpbpm:
 			out_bpm.append((warpstart, bpm))
+
+	if not out_bpm:
+		raise UrcError("syntax", 1, "no positive BPM in simfile")
 
 	return offset, out_bpm, out_stop, out_warp

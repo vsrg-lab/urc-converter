@@ -39,7 +39,7 @@ module Model =
 
         static member Empty =
             {
-                Mode = 3
+                Mode = 0
                 Title = None
                 TitleUnicode = None
                 Artist = None

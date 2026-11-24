@@ -27,7 +27,7 @@ class OsuHitObject:
 class OsuBeatmap:
 	"""Source model of an osu!mania beatmap."""
 
-	mode: int = 3
+	mode: int = 0
 	title: str | None = None
 	title_unicode: str | None = None
 	artist: str | None = None
