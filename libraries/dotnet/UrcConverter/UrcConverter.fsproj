@@ -4,7 +4,7 @@
 		<TargetFramework>net10.0</TargetFramework>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<PackageId>UrcConverter</PackageId>
-		<Version>0.2.1</Version>
+		<Version>0.2.2</Version>
 		<Authors>CloudHolic</Authors>
 		<Description>URC (Universal Rhythm Chart) parser, serializer, playback rate scaler, and VSRG chart converter library.</Description>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>

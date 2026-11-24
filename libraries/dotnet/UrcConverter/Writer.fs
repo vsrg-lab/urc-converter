@@ -6,11 +6,39 @@ module Writer =
     open System.Globalization
 
     let private floatText (value: float) =
-        // Spec formatting: if integer-valued, format as integer (e.g. 1.0 -> 1)
-        if value = Math.Floor value then
-            (int64 value).ToString(CultureInfo.InvariantCulture)
+        if value = 0.0 then
+            "0"
         else
-            value.ToString(CultureInfo.InvariantCulture)
+            let text = value.ToString(CultureInfo.InvariantCulture)
+            let eIdx = text.IndexOfAny([| 'e'; 'E' |])
+
+            if eIdx = -1 then
+                text
+            else
+                let neg = text.StartsWith('-')
+                let mantissaStart = if neg then 1 else 0
+                let mantissa = text.Substring(mantissaStart, eIdx - mantissaStart)
+                let exp = Int32.Parse(text.Substring(eIdx + 1), CultureInfo.InvariantCulture)
+                let dotIdx = mantissa.IndexOf('.')
+
+                let digits =
+                    if dotIdx = -1 then
+                        mantissa
+                    else
+                        mantissa.Substring(0, dotIdx) + mantissa.Substring(dotIdx + 1)
+
+                let fracLen = if dotIdx = -1 then 0 else mantissa.Length - dotIdx - 1
+                let point = digits.Length - fracLen + exp
+
+                let body =
+                    if point <= 0 then
+                        "0." + String('0', -point) + digits
+                    elif point >= digits.Length then
+                        digits + String('0', point - digits.Length)
+                    else
+                        digits.Substring(0, point) + "." + digits.Substring(point)
+
+                if neg then "-" + body else body
 
     let private joined (values: float list) =
         values |> List.map floatText |> String.concat ", "

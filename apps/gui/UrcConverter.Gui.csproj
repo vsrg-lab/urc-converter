@@ -8,7 +8,7 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<RootNamespace>UrcConverter.Gui</RootNamespace>
 		<AssemblyName>UrcConverter.Gui</AssemblyName>
-		<Version>0.2.1</Version>
+		<Version>0.2.2</Version>
 	</PropertyGroup>
 
 	<ItemGroup>

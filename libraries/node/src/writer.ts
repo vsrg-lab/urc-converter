@@ -14,11 +14,33 @@ import {
 } from "./strings.js";
 
 /**
- * Formats a float as the shortest round-trip decimal without a forced
- * fraction part (`16.5`, `222.22`, `120`).
+ * Formats a float as the shortest round-trip plain decimal without
+ * scientific notation or a forced fraction part (`16.5`, `222.22`, `120`).
  */
 function formatFloat(value: number): string {
-	return String(value);
+	if (value === 0)
+		return "0";
+	const text = String(value);
+	const eIdx = text.search(/[eE]/);
+	if (eIdx === -1)
+		return text;
+	const neg = text.startsWith("-");
+	const mantissa = text.slice(neg ? 1 : 0, eIdx);
+	const exp = Number(text.slice(eIdx + 1));
+	const dotIdx = mantissa.indexOf(".");
+	const digits = dotIdx === -1
+		? mantissa
+		: mantissa.slice(0, dotIdx) + mantissa.slice(dotIdx + 1);
+	const fracLen = dotIdx === -1 ? 0 : mantissa.length - dotIdx - 1;
+	const point = digits.length - fracLen + exp;
+	let body: string;
+	if (point <= 0)
+		body = `0.${"0".repeat(-point)}${digits}`;
+	else if (point >= digits.length)
+		body = digits + "0".repeat(point - digits.length);
+	else
+		body = `${digits.slice(0, point)}.${digits.slice(point)}`;
+	return neg ? `-${body}` : body;
 }
 
 function joinFloats(values: number[]): string {

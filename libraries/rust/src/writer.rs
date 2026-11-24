@@ -96,9 +96,11 @@ fn join_floats(values: &[f64]) -> String {
         .join(", ")
 }
 
-/// Formats a float as the shortest round-trip decimal without a forced
-/// fraction part (`16.5`, `222.22`, `120`).
+/// Formats a float as the shortest round-trip plain decimal without
+/// scientific notation or a forced fraction part (`16.5`, `222.22`, `120`).
 fn format_float(value: f64) -> String {
-    let text = format!("{value:?}");
-    text.strip_suffix(".0").unwrap_or(&text).to_string()
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    value.to_string()
 }

@@ -1,5 +1,7 @@
 """Canonical URC serializer."""
 
+from decimal import Decimal
+
 from .model import Chart, Judgment
 from .strings import (
 	JUDGMENT_FIELD_RATE,
@@ -17,9 +19,13 @@ from .strings import (
 
 
 def _float(value: float) -> str:
+	if value == 0.0:
+		return "0"
 	text = repr(value)
-	if text.endswith(".0"):
-		text = text[:-2]
+	if "e" in text or "E" in text:
+		text = format(Decimal(text), "f")
+	if "." in text:
+		text = text.rstrip("0").rstrip(".")
 	return text
 
 
