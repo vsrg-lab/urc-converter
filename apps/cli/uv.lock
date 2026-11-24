@@ -73,7 +73,7 @@ wheels = [
 
 [[package]]
 name = "urc-cli"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "urc-converter" },
@@ -85,7 +85,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "urc-converter", editable = "../../libraries/python" }]
+requires-dist = [{ name = "urc-converter", specifier = ">=0.2.0" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff" }]
@@ -93,13 +93,11 @@ dev = [{ name = "ruff" }]
 [[package]]
 name = "urc-converter"
 version = "0.2.0"
-source = { editable = "../../libraries/python" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
 ]
-
-[package.metadata]
-requires-dist = [{ name = "pyyaml", specifier = ">=6.0.4" }]
-
-[package.metadata.requires-dev]
-dev = [{ name = "ruff" }]
+sdist = { url = "https://files.pythonhosted.org/packages/df/6d/0d0ead8aebeab1bffa704c2bdda202eeb4621e7643bfe59ca66203f8608d/urc_converter-0.2.0.tar.gz", hash = "sha256:fb03bfa426c6e002358e2ae47da07751fb727824d2315673b907af42e52018bb", size = 34598, upload-time = "2026-11-24T02:02:02.501Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/54/cae945db349e14fcd3a328f34666d216bc93548ea13e27712e68eb3270d0/urc_converter-0.2.0-py3-none-any.whl", hash = "sha256:6c27ead2b6b83f00ac4e6d9400d82513e7901b124bc75db50fb1af67377c4097", size = 42715, upload-time = "2026-11-24T02:02:01.323Z" },
+]

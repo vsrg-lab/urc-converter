@@ -5,7 +5,7 @@ Converts vertical-scrolling rhythm game (VSRG) chart formats to
 provides URC parsing, serialization, and playback rate scaling libraries in
 multiple languages.
 
-## URC libraries (`0.2.0`)
+## URC libraries
 
 All four ports expose the same capabilities:
 

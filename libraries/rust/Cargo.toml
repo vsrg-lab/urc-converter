@@ -1,6 +1,6 @@
 [package]
 name = "urc-converter"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "URC (Universal Rhythm Chart) parser and converter library"
 license = "MIT"

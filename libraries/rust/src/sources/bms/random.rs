@@ -19,7 +19,7 @@ impl JavaRandom {
     }
 
     pub fn next_int(&mut self, bound: u64) -> u64 {
-        if bound & bound.wrapping_neg() == bound {
+        if bound.is_power_of_two() {
             return (bound.wrapping_mul(self.next(31))) >> 31;
         }
         loop {

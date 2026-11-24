@@ -55,7 +55,7 @@
 		</Grid.RowDefinitions>
 
 		<!-- Title bar -->
-		<ui:TitleBar Grid.Row="0" Title="URC Converter 0.2.0" ShowMaximize="True" />
+		<ui:TitleBar Grid.Row="0" Title="URC Converter 0.2.1" ShowMaximize="True" />
 
 		<!-- Top toolbar: file actions + playback rate bar -->
 		<Border Grid.Row="1"
