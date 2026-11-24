@@ -24,7 +24,7 @@ jobs:
     name: Verify manifest versions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check version parity across all ports
         env:
@@ -73,9 +73,9 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.4.0
 
       - name: Build Python distributions
         run: uv build libraries/python
@@ -93,13 +93,13 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -109,7 +109,7 @@ jobs:
           pnpm --dir libraries/node lint
 
       - name: Publish to npm (OIDC)
-        run: pnpm --dir libraries/node publish --access public --no-git-checks
+        run: pnpm --dir libraries/node stage publish --access public --no-git-checks
 
   publish-crates:
     name: Publish to crates.io
@@ -121,7 +121,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -144,9 +144,9 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 

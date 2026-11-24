@@ -5,6 +5,11 @@
 	"license": "MIT",
 	"author": "CloudHolic <cloudholic@pm.me>",
 	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/vsrg-lab/urc-converter.git",
+		"directory": "libraries/node"
+	},
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",
