@@ -75,15 +75,26 @@ pub fn get_lane(mode: &'static str, channel: &str) -> Option<u32> {
     let side = side_of(channel.chars().next()?);
     let key = channel.chars().nth(1)?;
     match (mode, side) {
-        ("5K" | "10K", side) => match key {
-            '6' => Some(side as u32 * 6),
-            '1'..='5' => Some((key as u32 - '0' as u32) + side as u32 * 6),
+        ("5K" | "10K", 0) => match key {
+            '6' => Some(0),
+            '1'..='5' => Some(key as u32 - '0' as u32),
             _ => None,
         },
-        ("7K" | "14K", side) => match key {
-            '6' => Some(side as u32 * 8),
-            '1'..='5' => Some((key as u32 - '0' as u32) + side as u32 * 8),
-            '8'..='9' => Some((key as u32 - '8' as u32 + 6) + side as u32 * 8),
+        ("5K" | "10K", 1) => match key {
+            '6' => Some(11),
+            '1'..='5' => Some((key as u32 - '0' as u32) + 5),
+            _ => None,
+        },
+        ("7K" | "14K", 0) => match key {
+            '6' => Some(0),
+            '1'..='5' => Some(key as u32 - '0' as u32),
+            '8'..='9' => Some(key as u32 - '8' as u32 + 6),
+            _ => None,
+        },
+        ("7K" | "14K", 1) => match key {
+            '6' => Some(15),
+            '1'..='5' => Some((key as u32 - '0' as u32) + 7),
+            '8'..='9' => Some((key as u32 - '8' as u32) + 13),
             _ => None,
         },
         ("PMS9", 0) => match key {
@@ -114,8 +125,8 @@ pub fn resolve_layout(mode: &'static str) -> (u64, u64, Option<Vec<u32>>) {
     match mode {
         "5K" => (5, 1, Some(vec![0])),
         "7K" => (7, 1, Some(vec![0])),
-        "10K" => (10, 2, Some(vec![0, 6])),
-        "14K" => (14, 2, Some(vec![0, 8])),
+        "10K" => (10, 2, Some(vec![0, 11])),
+        "14K" => (14, 2, Some(vec![0, 15])),
         "PMS9" => (9, 0, None),
         "PMS18" => (18, 0, None),
         _ => unreachable!(),
@@ -137,8 +148,17 @@ pub fn pair_long_notes(
             match start {
                 None => start = Some(*time),
                 Some(s) => {
-                    notes.push((crate::sources::shared::round_ms(s / 1000.0), lane, crate::model::NoteType::Ls));
-                    notes.push((crate::sources::shared::round_ms(time / 1000.0), lane, crate::model::NoteType::Le));
+                    let ls_ms = crate::sources::shared::round_ms(s / 1000.0);
+                    let le_ms = crate::sources::shared::round_ms(time / 1000.0);
+                    if le_ms <= ls_ms {
+                        return Err(crate::error::UrcError::new(
+                            crate::strings::ZERO_LENGTH_HOLD,
+                            1,
+                            format!("zero-length hold on lane {lane} at {ls_ms}ms"),
+                        ));
+                    }
+                    notes.push((ls_ms, lane, crate::model::NoteType::Ls));
+                    notes.push((le_ms, lane, crate::model::NoteType::Le));
                     start = None;
                 }
             }
@@ -147,8 +167,17 @@ pub fn pair_long_notes(
         for (time, obj) in stream {
             if obj == "00" {
                 if let Some(s) = start {
-                    notes.push((crate::sources::shared::round_ms(s / 1000.0), lane, crate::model::NoteType::Ls));
-                    notes.push((crate::sources::shared::round_ms(time / 1000.0), lane, crate::model::NoteType::Le));
+                    let ls_ms = crate::sources::shared::round_ms(s / 1000.0);
+                    let le_ms = crate::sources::shared::round_ms(time / 1000.0);
+                    if le_ms <= ls_ms {
+                        return Err(crate::error::UrcError::new(
+                            crate::strings::ZERO_LENGTH_HOLD,
+                            1,
+                            format!("zero-length hold on lane {lane} at {ls_ms}ms"),
+                        ));
+                    }
+                    notes.push((ls_ms, lane, crate::model::NoteType::Ls));
+                    notes.push((le_ms, lane, crate::model::NoteType::Le));
                     start = None;
                 }
             } else if start.is_none() {
@@ -209,8 +238,17 @@ pub fn build_notes(
                         && obj == lnobj
                         && let Some(p) = pending
                     {
-                        notes.push((crate::sources::shared::round_ms(p / 1000.0), lane, crate::model::NoteType::Ls));
-                        notes.push((crate::sources::shared::round_ms(time / 1000.0), lane, crate::model::NoteType::Le));
+                        let ls_ms = crate::sources::shared::round_ms(p / 1000.0);
+                        let le_ms = crate::sources::shared::round_ms(time / 1000.0);
+                        if le_ms <= ls_ms {
+                            return Err(crate::error::UrcError::new(
+                                crate::strings::ZERO_LENGTH_HOLD,
+                                1,
+                                format!("zero-length hold on lane {lane} at {ls_ms}ms"),
+                            ));
+                        }
+                        notes.push((ls_ms, lane, crate::model::NoteType::Ls));
+                        notes.push((le_ms, lane, crate::model::NoteType::Le));
                         pending = None;
                     } else {
                         if let Some(p) = pending {

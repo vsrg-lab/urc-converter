@@ -1,5 +1,6 @@
 namespace UrcConverter.Sources.Qua
 
+[<RequireQualifiedAccess>]
 module Parse =
 
     open System

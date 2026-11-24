@@ -9,10 +9,13 @@ from .model import (
 	Meter,
 	Note,
 	NoteType,
+	RateResult,
 	TimingPoint,
+	UrcWarning,
 	Version,
 )
 from .parser.scan import parse
+from .rate import scale_rate
 from .writer import write
 
 __all__ = [
@@ -23,9 +26,12 @@ __all__ = [
 	"Meter",
 	"Note",
 	"NoteType",
+	"RateResult",
 	"TimingPoint",
 	"UrcError",
+	"UrcWarning",
 	"Version",
 	"parse",
+	"scale_rate",
 	"write",
 ]

@@ -73,8 +73,9 @@ module Writer =
 
         let noteLines =
             chart.Notes
-            |> List.sortBy (fun note -> note.TimestampMs, note.Lane)
-            |> List.map (fun note -> $"{note.TimestampMs}, {note.Lane}, {note.Type.Token}")
+            |> List.indexed
+            |> List.sortBy (fun (index, note) -> note.TimestampMs, note.Lane, index)
+            |> List.map (fun (_, note) -> $"{note.TimestampMs}, {note.Lane}, {note.Type.Token}")
 
         [
             [ $"@URC {chart.FormatVersion.Major}.{chart.FormatVersion.Minor}" ]

@@ -1,5 +1,6 @@
 namespace UrcConverter.Sources.Sm
 
+[<RequireQualifiedAccess>]
 module Parse =
 
     open FsToolkit.ErrorHandling
@@ -65,93 +66,125 @@ module Parse =
         | Some lanes -> Ok lanes
         | None -> Error(UrcError.unsupportedVersion 1 $"unsupported steps type: {shown}")
 
+    let private prependReversed (entries: 'a list) (acc: 'a list) =
+        List.fold (fun state item -> item :: state) acc entries
+
+    let private finalizeTiming (timing: Timing) : Timing =
+        { timing with
+            Bpms = List.rev timing.Bpms
+            Stops = List.rev timing.Stops
+            Delays = List.rev timing.Delays
+            Warps = List.rev timing.Warps
+            Scrolls = List.rev timing.Scrolls
+            TimeSignatures = List.rev timing.TimeSignatures
+            Fakes = List.rev timing.Fakes
+        }
+
     let private timingTag (timing: Timing) (tag: string) (value: string) : Result<Timing, UrcError> =
         match tag with
         | "OFFSET" -> parseFloat value |> Result.map (fun offset -> { timing with Offset = offset })
-        | "BPMS" -> pairs value true |> Result.map (fun entries -> { timing with Bpms = timing.Bpms @ entries })
+        | "BPMS" ->
+            pairs value true
+            |> Result.map (fun entries -> { timing with Bpms = prependReversed entries timing.Bpms })
         | "STOPS"
-        | "FREEZES" -> pairs value true |> Result.map (fun entries -> { timing with Stops = timing.Stops @ entries })
-        | "DELAYS" -> pairs value true |> Result.map (fun entries -> { timing with Delays = timing.Delays @ entries })
-        | "WARPS" -> pairs value false |> Result.map (fun entries -> { timing with Warps = timing.Warps @ entries })
-        | "SCROLLS" -> pairs value false |> Result.map (fun entries -> { timing with Scrolls = timing.Scrolls @ entries })
+        | "FREEZES" ->
+            pairs value true
+            |> Result.map (fun entries -> { timing with Stops = prependReversed entries timing.Stops })
+        | "DELAYS" ->
+            pairs value true
+            |> Result.map (fun entries -> { timing with Delays = prependReversed entries timing.Delays })
+        | "WARPS" ->
+            pairs value false
+            |> Result.map (fun entries -> { timing with Warps = prependReversed entries timing.Warps })
+        | "SCROLLS" ->
+            pairs value false
+            |> Result.map (fun entries -> { timing with Scrolls = prependReversed entries timing.Scrolls })
         | "FAKES" ->
             pairs value false
             |> Result.map (fun entries ->
-                { timing with Fakes = timing.Fakes @ List.filter (fun (_, length) -> length > 0.0) entries })
+                let positive = List.filter (fun (_, length) -> length > 0.0) entries
+                { timing with Fakes = prependReversed positive timing.Fakes })
         | "TIMESIGNATURES" ->
             expressions value 3
-            |> Result.bind (fun list ->
-                let rec loop (acc: (float * int * int) list) (rest: string list list) =
-                    match rest with
-                    | [] -> Ok(List.rev acc)
-                    | parts :: tail ->
-                        match parseBeat parts[0], parseInt parts[1], parseInt parts[2] with
-                        | Error error, _, _
-                        | _, Error error, _
-                        | _, _, Error error -> Error error
-                        | Ok beat, Ok numerator, Ok denominator when
-                            numerator >= 1 && denominator >= 1 && beat >= 0.0
-                            ->
-                            loop ((beat, numerator, denominator) :: acc) tail
-                        | Ok _, Ok _, Ok _ -> loop acc tail
+            |> Result.bind (
+                List.traverseResultM (fun parts ->
+                    match parts with
+                    | beatStr :: numStr :: denStr :: _ ->
+                        result {
+                            let! beat = parseBeat beatStr
+                            let! numerator = parseInt numStr
+                            let! denominator = parseInt denStr
 
-                loop [] list)
-            |> Result.map (fun entries -> { timing with TimeSignatures = timing.TimeSignatures @ entries })
+                            return
+                                if numerator >= 1 && denominator >= 1 && beat >= 0.0 then
+                                    Some(beat, numerator, denominator)
+                                else
+                                    None
+                        }
+                    | _ -> Error(UrcError.syntax 1 "malformed time signature"))
+            )
+            |> Result.map (fun entries ->
+                let valid = List.choose id entries
+                { timing with TimeSignatures = prependReversed valid timing.TimeSignatures })
         | _ -> Ok timing
 
-    // --- public API ---------------------------------------------------------
-
     /// Parses a .sm or .ssc simfile into its source model.
-    let parseSm (text: string) : Result<SmFile, UrcError> =
-        let applyTag (state: SmFile * SmChart option) (params_: string list) : Result<SmFile * SmChart option, UrcError> =
-            let simfile, chart = state
-            let tag = params_.Head.ToUpperInvariant()
-            let value = if params_.Length > 1 then params_[1] else ""
+    let parse (text: string) : Result<SmFile, UrcError> =
+        let applyTag (simfile: SmFile, chart: SmChart option) (params_: string list) : Result<SmFile * SmChart option, UrcError> =
+            match params_ with
+            | [] -> Ok(simfile, chart)
+            | rawTag :: rest ->
+                let tag = rawTag.ToUpperInvariant()
+                let value = match rest with | v :: _ -> v | [] -> ""
 
-            if tag = "NOTEDATA" then
-                Ok(simfile, Some SmChart.Empty)
-            elif tag = "NOTES" || tag = "NOTES2" then
-                match chart with
-                | Some openChart ->
-                    resolveLanes openChart.StepsType
-                    |> Result.bind (fun lanes -> parseNoteData value lanes)
-                    |> Result.map (fun notes ->
-                        let charts = { openChart with Notes = notes } :: simfile.Charts
-                        ({ simfile with Charts = charts }, None))
-                | None when params_.Length >= 7 ->
-                    let block =
-                        { SmChart.Empty with
-                            StepsType = params_[1].Trim()
-                            Description = params_[2].Trim()
-                            Difficulty = params_[3].Trim()
-                            Credit = params_[2].Trim()
-                        }
+                if tag = "NOTEDATA" then
+                    Ok(simfile, Some SmChart.Empty)
+                elif tag = "NOTES" || tag = "NOTES2" then
+                    match chart, rest with
+                    | Some openChart, _ ->
+                        resolveLanes openChart.StepsType
+                        |> Result.bind (fun lanes -> parseNoteData value lanes)
+                        |> Result.map (fun notes ->
+                            let finalized =
+                                { openChart with
+                                    Timing = openChart.Timing |> Option.map finalizeTiming
+                                    Notes = notes
+                                }
 
-                    resolveLanes block.StepsType
-                    |> Result.bind (fun lanes -> parseNoteData params_[6] lanes)
-                    |> Result.map (fun notes ->
-                        { simfile with Charts = { block with Notes = notes } :: simfile.Charts }, None)
-                | None -> Ok(simfile, chart)
-            else
-                match chart with
-                | None ->
-                    match tag with
-                    | "TITLE" -> Ok({ simfile with Title = value }, chart)
-                    | "SUBTITLE" -> Ok({ simfile with Subtitle = value }, chart)
-                    | "ARTIST" -> Ok({ simfile with Artist = value }, chart)
-                    | "CREDIT" -> Ok({ simfile with Credit = value }, chart)
-                    | _ ->
-                        timingTag simfile.Timing tag value
-                        |> Result.map (fun timing -> { simfile with Timing = timing }, chart)
-                | Some openChart ->
-                    match tag with
-                    | "STEPSTYPE" -> Ok(simfile, Some { openChart with StepsType = value.Trim() })
-                    | "DESCRIPTION" -> Ok(simfile, Some { openChart with Description = value.Trim() })
-                    | "DIFFICULTY" -> Ok(simfile, Some { openChart with Difficulty = value.Trim() })
-                    | "CHARTNAME" -> Ok(simfile, Some { openChart with ChartName = value.Trim() })
-                    | "CREDIT" -> Ok(simfile, Some { openChart with Credit = value })
-                    | _ ->
-                        if timingTags.Contains tag then
+                            { simfile with Charts = finalized :: simfile.Charts }, None)
+                    | None, stepsType :: description :: difficulty :: _ :: _ :: noteData :: _ ->
+                        let block =
+                            { SmChart.Empty with
+                                StepsType = stepsType.Trim()
+                                Description = description.Trim()
+                                Difficulty = difficulty.Trim()
+                                Credit = description.Trim()
+                            }
+
+                        resolveLanes block.StepsType
+                        |> Result.bind (fun lanes -> parseNoteData noteData lanes)
+                        |> Result.map (fun notes ->
+                            { simfile with Charts = { block with Notes = notes } :: simfile.Charts }, None)
+                    | None, _ -> Ok(simfile, chart)
+                else
+                    match chart with
+                    | None ->
+                        match tag with
+                        | "TITLE" -> Ok({ simfile with Title = value }, chart)
+                        | "SUBTITLE" -> Ok({ simfile with Subtitle = value }, chart)
+                        | "ARTIST" -> Ok({ simfile with Artist = value }, chart)
+                        | "CREDIT" -> Ok({ simfile with Credit = value }, chart)
+                        | _ ->
+                            timingTag simfile.Timing tag value
+                            |> Result.map (fun timing -> { simfile with Timing = timing }, chart)
+                    | Some openChart ->
+                        match tag with
+                        | "STEPSTYPE" -> Ok(simfile, Some { openChart with StepsType = value.Trim() })
+                        | "DESCRIPTION" -> Ok(simfile, Some { openChart with Description = value.Trim() })
+                        | "DIFFICULTY" -> Ok(simfile, Some { openChart with Difficulty = value.Trim() })
+                        | "CHARTNAME" -> Ok(simfile, Some { openChart with ChartName = value.Trim() })
+                        | "CREDIT" -> Ok(simfile, Some { openChart with Credit = value })
+                        | _ when timingTags.Contains tag ->
                             let baseTiming =
                                 match openChart.Timing with
                                 | Some timing -> timing
@@ -159,22 +192,24 @@ module Parse =
 
                             timingTag baseTiming tag value
                             |> Result.map (fun timing -> simfile, Some { openChart with Timing = Some timing })
-                        else
-                            Ok(simfile, Some openChart)
+                        | _ -> Ok(simfile, Some openChart)
 
-        let rec loop state =
-            function
+        let rec loop state remaining =
+            match remaining with
             | [] ->
                 let simfile, _ = state
 
                 if List.isEmpty simfile.Charts then
                     Error(UrcError.syntax 1 "no chart in simfile")
                 else
-                    Ok { simfile with Charts = List.rev simfile.Charts }
+                    Ok
+                        { simfile with
+                            Timing = finalizeTiming simfile.Timing
+                            Charts = List.rev simfile.Charts
+                        }
             | params_ :: rest ->
                 match applyTag state params_ with
                 | Ok next -> loop next rest
                 | Error err -> Error err
 
         loop (SmFile.Empty, None) (tokenize text)
-

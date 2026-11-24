@@ -4,6 +4,7 @@ use std::cmp::{max, min};
 
 use crate::error::{Result, UrcError};
 use crate::model::{Chart, Judgment, Layout, Metadata, Note, NoteType, Version};
+use crate::strings::ZERO_LENGTH_HOLD;
 
 use super::model::OsuBeatmap;
 use crate::sources::shared::{build_timing, check_hold_overlap, first_downbeat_after};
@@ -95,6 +96,13 @@ pub fn convert_osu(beatmap: &OsuBeatmap) -> Result<Chart> {
                     format!("hold ends before it starts: {end_time} < {}", obj.time),
                 ));
             }
+            if end_time == obj.time {
+                return Err(UrcError::new(
+                    ZERO_LENGTH_HOLD,
+                    1,
+                    format!("zero-length hold on lane {lane} at {}ms", obj.time),
+                ));
+            }
             notes.push(Note {
                 timestamp_ms: obj.time - first_note_time,
                 lane,
@@ -131,10 +139,12 @@ pub fn convert_osu(beatmap: &OsuBeatmap) -> Result<Chart> {
     let title = beatmap
         .title_unicode
         .clone()
+        .filter(|value| !value.is_empty())
         .or_else(|| beatmap.title.clone());
     let artist = beatmap
         .artist_unicode
         .clone()
+        .filter(|value| !value.is_empty())
         .or_else(|| beatmap.artist.clone());
     let missing: Vec<&str> = [
         ("Title", title.as_deref()),
@@ -143,7 +153,7 @@ pub fn convert_osu(beatmap: &OsuBeatmap) -> Result<Chart> {
         ("Version", beatmap.version.as_deref()),
     ]
     .into_iter()
-    .filter_map(|(label, value)| value.is_none().then_some(label))
+    .filter_map(|(label, value)| value.is_none_or(str::is_empty).then_some(label))
     .collect();
 
     if !missing.is_empty() {

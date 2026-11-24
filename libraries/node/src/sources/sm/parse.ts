@@ -1,6 +1,7 @@
 /**
  * Parser for StepMania (.sm/.ssc) simfiles.
  */
+import { UrcError } from "../../error.js";
 import type { SmChart, SmFile, Timing } from "./model.js";
 import {
 	beatValue,
@@ -11,7 +12,6 @@ import {
 	tokenize
 } from "./msd.js";
 import { parseNoteData } from "./notes.js";
-import { UrcError } from "../../error.js";
 
 const STEP_LANES: Record<string, number> = {
 	"dance-single": 4,

@@ -1,8 +1,8 @@
 /**
  * Parser for BMS-family bytes.
  */
-import type { BmsChart } from "./model.js";
 import { UrcError } from "../../error.js";
+import type { BmsChart } from "./model.js";
 
 /** Options for BMS parsing and random branch resolution. */
 export interface BmsParseOptions {

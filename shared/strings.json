@@ -1,7 +1,13 @@
 {
 	"categories": {
 		"syntax": "Malformed syntax: bad numbers, field shape, unknown section, or bad @URC header",
-		"unsupported-version": "@URC version parses but is not supported by this library"
+		"unsupported-version": "@URC version parses but is not supported by this library",
+		"zero-length-hold": "Long note has zero duration (start and end at the same timestamp)",
+		"invalid-rate": "Playback rate must be between 0.50 and 3.00 in 0.01 steps"
+	},
+	"warnings": {
+		"note-gap-clamped": "Notes on the same lane fell below 1ms apart and were adjusted to 1ms",
+		"hold-length-clamped": "Long note duration fell below 1ms and was adjusted to 1ms"
 	},
 	"rules": {
 		"1": "First line is '@URC <version>'",

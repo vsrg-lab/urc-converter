@@ -5,6 +5,11 @@ module Strings =
 
     let syntax = "syntax"
     let unsupportedVersion = "unsupported-version"
+    let zeroLengthHold = "zero-length-hold"
+    let invalidRate = "invalid-rate"
+
+    let warningNoteGapClamped = "note-gap-clamped"
+    let warningHoldLengthClamped = "hold-length-clamped"
 
     let sections = [ "@URC"; "@Metadata"; "@Judgment"; "@Layout"; "@Timing"; "@Notes" ]
     let sectionUrc = "@URC"

@@ -99,3 +99,38 @@ pub struct Chart {
     pub timing: Vec<TimingPoint>,
     pub notes: Vec<Note>,
 }
+
+/// Machine-readable warning code emitted during chart transformation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarningCode {
+    /// Same-lane notes fell below 1ms apart and were adjusted to 1ms.
+    NoteGapClamped,
+    /// Long note duration fell below 1ms and was adjusted to 1ms.
+    HoldLengthClamped,
+}
+
+impl WarningCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WarningCode::NoteGapClamped => crate::strings::WARNING_NOTE_GAP_CLAMPED,
+            WarningCode::HoldLengthClamped => crate::strings::WARNING_HOLD_LENGTH_CLAMPED,
+        }
+    }
+}
+
+/// Non-fatal adjustment warning emitted during chart transformation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrcWarning {
+    pub code: WarningCode,
+    pub lane: u32,
+    pub original_ms: i64,
+    pub adjusted_ms: i64,
+    pub message: String,
+}
+
+/// Result of playback rate scaling, pairing the adjusted chart with any warnings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RateResult {
+    pub chart: Chart,
+    pub warnings: Vec<UrcWarning>,
+}

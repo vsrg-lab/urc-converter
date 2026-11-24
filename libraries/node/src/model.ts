@@ -88,3 +88,27 @@ export interface Chart {
 	timing: TimingPoint[];
 	notes: Note[];
 }
+
+/**
+ * Machine-readable warning code emitted during chart transformation.
+ */
+export type WarningCode = "note-gap-clamped" | "hold-length-clamped";
+
+/**
+ * Non-fatal adjustment warning emitted during chart transformation.
+ */
+export interface UrcWarning {
+	code: WarningCode;
+	lane: number;
+	originalMs: number;
+	adjustedMs: number;
+	message: string;
+}
+
+/**
+ * Result of playback rate scaling, pairing the adjusted chart with any warnings.
+ */
+export interface RateResult {
+	chart: Chart;
+	warnings: UrcWarning[];
+}

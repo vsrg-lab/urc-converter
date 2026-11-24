@@ -67,3 +67,36 @@ type Chart =
         TimingPoints: TimingPoint list
         Notes: Note list
     }
+
+/// Machine-readable warning code emitted during chart transformation.
+[<RequireQualifiedAccess>]
+type WarningCode =
+    | NoteGapClamped
+    | HoldLengthClamped
+
+    member this.Code =
+        match this with
+        | WarningCode.NoteGapClamped -> Strings.warningNoteGapClamped
+        | WarningCode.HoldLengthClamped -> Strings.warningHoldLengthClamped
+
+/// Non-fatal adjustment warning emitted during chart transformation.
+type UrcWarning =
+    {
+        CodeKind: WarningCode
+        Lane: int
+        OriginalMs: int
+        AdjustedMs: int
+        Message: string
+    }
+
+    member this.Code = this.CodeKind.Code
+
+    override this.ToString() =
+        $"[{this.Code}] {this.Message}"
+
+/// Result of playback rate scaling, pairing the adjusted chart with any warnings.
+type RateResult =
+    {
+        Chart: Chart
+        Warnings: UrcWarning list
+    }

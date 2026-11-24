@@ -5,7 +5,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from urc_converter import NoteType, UrcError, parse, write
+from urc_converter import NoteType, UrcError, parse, scale_rate, write
 from urc_converter.sources import (
 	convert_bms,
 	convert_ojn,
@@ -23,7 +23,7 @@ from urc_converter.sources import (
 def command_info(path: Path) -> int:
 	try:
 		chart = parse(path.read_text(encoding="utf-8"))
-	except UrcError as error:
+	except (UrcError, OSError, UnicodeDecodeError) as error:
 		print(f"error: {path}: {error}", file=sys.stderr)
 		return 1
 
@@ -50,9 +50,12 @@ def command_info(path: Path) -> int:
 def command_validate(path: Path) -> int:
 	try:
 		parse(path.read_text(encoding="utf-8"))
-	except UrcError as error:
+	except (UrcError, OSError, UnicodeDecodeError) as error:
 		print(f"{path}: FAIL")
-		print(f"  {error.category} at line {error.line}: {error.message}")
+		if isinstance(error, UrcError):
+			print(f"  {error.category} at line {error.line}: {error.message}")
+		else:
+			print(f"  {error}")
 		return 1
 
 	print(f"{path}: OK")
@@ -64,8 +67,9 @@ def command_convert(
 	seed: int | None,
 	branches: list[int] | None,
 	chart: int | None,
+	rate: float | None,
 ) -> int:
-	"""Convert a source chart to URC on stdout."""
+	"""Convert a source chart (or scale a URC chart) and write canonical URC on stdout."""
 	suffix = path.suffix.lower()
 
 	try:
@@ -102,6 +106,8 @@ def command_convert(
 				charts = convert_sm(parse_sm(path.read_text(encoding="utf-8")))
 			case ".ojn":
 				charts = convert_ojn(parse_ojn(path.read_bytes()))
+			case ".urc":
+				charts = [parse(path.read_text(encoding="utf-8"))]
 			case unsupported:
 				print(f"error: {path}: unsupported file type: {unsupported}", file=sys.stderr)
 				return 1
@@ -109,18 +115,24 @@ def command_convert(
 		if chart is not None:
 			if not 0 <= chart < len(charts):
 				print(
-					f"error: {path}: chart index {chart} out of range"
-					f" ({len(charts)} charts)",
+					f"error: {path}: chart index {chart} out of range ({len(charts)} charts)",
 					file=sys.stderr,
 				)
 				return 1
 			charts = [charts[chart]]
 
+		effective_rate = 1.0 if rate is None else rate
 		for index, converted in enumerate(charts):
+			scaled = scale_rate(converted, effective_rate)
+			for warning in scaled.warnings:
+				print(
+					f"warning: {path}: [{warning.code}] {warning.message}",
+					file=sys.stderr,
+				)
 			if index:
 				sys.stdout.buffer.write(b"\n")
-			sys.stdout.buffer.write(write(converted).encode("utf-8"))
-	except UrcError as error:
+			sys.stdout.buffer.write(write(scaled.chart).encode("utf-8"))
+	except (UrcError, OSError, UnicodeDecodeError) as error:
 		print(f"error: {path}: {error}", file=sys.stderr)
 		return 1
 	return 0
@@ -147,7 +159,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 	validate_parser.add_argument("file", type=Path)
 	validate_parser.set_defaults(handler=command_validate)
 
-	convert_parser = subparsers.add_parser("convert", help="convert a source chart to URC.")
+	convert_parser = subparsers.add_parser(
+		"convert", help="convert a source chart to URC (or scale an existing .urc file)"
+	)
 	convert_parser.add_argument("file", type=Path)
 	convert_parser.add_argument("--seed", type=int, help="seed for BMS #RANDOM expansion")
 	convert_parser.add_argument(
@@ -158,11 +172,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 		type=int,
 		help="chart index for multi-chart sources (default: all charts)",
 	)
+	convert_parser.add_argument(
+		"--rate",
+		type=float,
+		help="playback rate between 0.50 and 3.00 in 0.01 steps (default: 1.00)",
+	)
 	convert_parser.set_defaults(handler=command_convert)
 
 	args = parser.parse_args(argv)
 	if args.command == "convert":
-		return command_convert(args.file, args.seed, args.branches, args.chart)
+		return command_convert(args.file, args.seed, args.branches, args.chart, args.rate)
 
 	return args.handler(args.file)
 

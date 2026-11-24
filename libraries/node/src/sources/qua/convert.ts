@@ -3,6 +3,7 @@
  */
 import { UrcError } from "../../error.js";
 import type { Chart, Note } from "../../model.js";
+import { ZERO_LENGTH_HOLD } from "../../strings.js";
 import { buildTiming, checkHoldOverlap, firstDownbeatAfter } from "../shared.js";
 import type { QuaMap } from "./model.js";
 
@@ -30,9 +31,13 @@ export function convertQua(qua: QuaMap): Chart {
 
 	const keys = modeKeys[1];
 	const specialKeys = qua.hasScratchKey ? 1 : 0;
-	const firstNoteTime = qua.hitObjects.length === 0
-		? 0
-		: Math.min(...qua.hitObjects.map(obj => obj.startTime));
+	let firstNoteTime = 0;
+	if (qua.hitObjects.length > 0) {
+		firstNoteTime = qua.hitObjects[0].startTime;
+		for (let i = 1; i < qua.hitObjects.length; i++)
+			if (qua.hitObjects[i].startTime < firstNoteTime)
+				firstNoteTime = qua.hitObjects[i].startTime;
+	}
 
 	const bpmPoints: Array<[number, number, number, number]> = qua.timingPoints.map(
 		point => [point.startTime, point.bpm, point.signature, 4]
@@ -59,6 +64,13 @@ export function convertQua(qua: QuaMap): Chart {
 				"syntax",
 				1,
 				`hold ends before it starts: ${obj.endTime} < ${obj.startTime}`
+			);
+
+		if (obj.endTime !== 0 && obj.endTime === obj.startTime)
+			throw new UrcError(
+				ZERO_LENGTH_HOLD,
+				1,
+				`zero-length hold on lane ${lane} at ${obj.startTime}ms`
 			);
 
 		if (obj.endTime !== 0) {

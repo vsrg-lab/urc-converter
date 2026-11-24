@@ -3,6 +3,7 @@
  */
 import { UrcError } from "../../error.js";
 import type { NoteType } from "../../model.js";
+import { ZERO_LENGTH_HOLD } from "../../strings.js";
 import { roundMs } from "../shared.js";
 import type { BmsChart } from "./model.js";
 
@@ -11,8 +12,8 @@ export const SIDE_OF: Record<string, number> = { "1": 0, "5": 0, D: 0, "2": 1, "
 export const LAYOUTS: Record<string, [number, number, number[] | null]> = {
 	"5K": [5, 1, [0]],
 	"7K": [7, 1, [0]],
-	"10K": [10, 2, [0, 6]],
-	"14K": [14, 2, [0, 8]],
+	"10K": [10, 2, [0, 11]],
+	"14K": [14, 2, [0, 15]],
 	PMS9: [9, 0, null],
 	PMS18: [18, 0, null]
 };
@@ -88,19 +89,35 @@ export function getLane(mode: string, channel: string): number | undefined {
 	const side = SIDE_OF[channel[0]];
 	const key = channel[1];
 	if (mode === "5K" || mode === "10K") {
+		if (side === 0) {
+			if (key === "6")
+				return 0;
+			if (key >= "1" && key <= "5")
+				return Number.parseInt(key, 10);
+			return undefined;
+		}
 		if (key === "6")
-			return side * 6;
+			return 11;
 		if (key >= "1" && key <= "5")
-			return Number.parseInt(key, 10) + side * 6;
+			return Number.parseInt(key, 10) + 5;
 		return undefined;
 	}
 	if (mode === "7K" || mode === "14K") {
+		if (side === 0) {
+			if (key === "6")
+				return 0;
+			if (key >= "1" && key <= "5")
+				return Number.parseInt(key, 10);
+			if (key === "8" || key === "9")
+				return Number.parseInt(key, 10) - 8 + 6;
+			return undefined;
+		}
 		if (key === "6")
-			return side * 8;
+			return 15;
 		if (key >= "1" && key <= "5")
-			return Number.parseInt(key, 10) + side * 8;
+			return Number.parseInt(key, 10) + 7;
 		if (key === "8" || key === "9")
-			return Number.parseInt(key, 10) - 8 + 6 + side * 8;
+			return Number.parseInt(key, 10) - 8 + 13;
 		return undefined;
 	}
 	if (mode === "PMS9") {
@@ -144,8 +161,16 @@ export function pairLongNotes(
 			if (start === null)
 				start = time;
 			else {
-				notes.push([roundMs(start / 1000.0), lane, "LS"]);
-				notes.push([roundMs(time / 1000.0), lane, "LE"]);
+				const lsMs = roundMs(start / 1000.0);
+				const leMs = roundMs(time / 1000.0);
+				if (leMs <= lsMs)
+					throw new UrcError(
+						ZERO_LENGTH_HOLD,
+						1,
+						`zero-length hold on lane ${lane} at ${lsMs}ms`
+					);
+				notes.push([lsMs, lane, "LS"]);
+				notes.push([leMs, lane, "LE"]);
 				start = null;
 			}
 		}
@@ -153,8 +178,16 @@ export function pairLongNotes(
 		for (const [time, obj] of stream)
 			if (obj === "00") {
 				if (start !== null) {
-					notes.push([roundMs(start / 1000.0), lane, "LS"]);
-					notes.push([roundMs(time / 1000.0), lane, "LE"]);
+					const lsMs = roundMs(start / 1000.0);
+					const leMs = roundMs(time / 1000.0);
+					if (leMs <= lsMs)
+						throw new UrcError(
+							ZERO_LENGTH_HOLD,
+							1,
+							`zero-length hold on lane ${lane} at ${lsMs}ms`
+						);
+					notes.push([lsMs, lane, "LS"]);
+					notes.push([leMs, lane, "LE"]);
 					start = null;
 				}
 			} else if (start === null)
@@ -200,8 +233,16 @@ export function buildNotes(
 			let pending: number | null = null;
 			for (const [time, obj] of stream)
 				if (chart.lnobj !== null && obj === chart.lnobj && pending !== null) {
-					notes.push([roundMs(pending / 1000.0), lane, "LS"]);
-					notes.push([roundMs(time / 1000.0), lane, "LE"]);
+					const lsMs = roundMs(pending / 1000.0);
+					const leMs = roundMs(time / 1000.0);
+					if (leMs <= lsMs)
+						throw new UrcError(
+							ZERO_LENGTH_HOLD,
+							1,
+							`zero-length hold on lane ${lane} at ${lsMs}ms`
+						);
+					notes.push([lsMs, lane, "LS"]);
+					notes.push([leMs, lane, "LE"]);
 					pending = null;
 				} else {
 					if (pending !== null)

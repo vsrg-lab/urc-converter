@@ -1,5 +1,6 @@
 namespace UrcConverter.Sources.Ojn
 
+[<RequireQualifiedAccess>]
 module Parse =
 
     open System
@@ -51,9 +52,11 @@ module Parse =
 
             let blob = Array.concat fields
 
-            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)
+            Shared.ensureCodePages ()
             let utf8 = UTF8Encoding(false, true)
-            let cp949 = Encoding.GetEncoding(949, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback)
+
+            let cp949 =
+                Encoding.GetEncoding(949, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback)
 
             let validates (encoding: Encoding) (bytes: byte[]) =
                 try
@@ -71,16 +74,17 @@ module Parse =
             match charset with
             | None -> return! Error(UrcError.syntax 108 "strings are neither ASCII, UTF-8, nor CP949")
             | Some encoding ->
-                let decoded =
+                let! strings =
                     fields
-                    |> List.map (fun field ->
+                    |> List.traverseResultM (fun field ->
                         try
                             Ok(encoding.GetString field)
                         with :? DecoderFallbackException ->
                             Error(UrcError.syntax 108 "invalid string byte sequence"))
 
-                let! strings = Shared.sequence decoded
-                return strings[0], strings[1], strings[2]
+                match strings with
+                | title :: artist :: noter :: _ -> return title, artist, noter
+                | _ -> return! Error(UrcError.syntax 108 "missing header string fields")
         }
 
     let rec private readEvents
@@ -100,21 +104,37 @@ module Parse =
         else
             let position = float eventIndex / float total
 
-            let event kind value =
-                { Measure = measure; Position = position; Channel = channel; Value = value; Kind = kind; Offset = offset }
+            let mkEvent kind =
+                {
+                    Measure = measure
+                    Position = position
+                    Kind = kind
+                    Offset = offset
+                }
 
             let acc' =
-                if channel <= 1 then
+                if channel = 0 then
                     let value = readF32 data offset
-                    if value <= 0.0 then acc else event 0 value :: acc
+                    if value <= 0.0 then acc else mkEvent (OjnEventKind.MeasureFraction value) :: acc
+                elif channel = 1 then
+                    let value = readF32 data offset
+                    if value <= 0.0 then acc else mkEvent (OjnEventKind.BpmChange value) :: acc
+                elif channel >= 9 then
+                    acc
                 else
                     let value = readI16 data offset
                     let noteType = int data[offset + 3]
 
-                    if channel >= 9 || value = 0s || noteType % 4 = 1 then
+                    if value = 0s then
                         acc
                     else
-                        event (noteType % 4) 0.0 :: acc
+                        let lane = channel - 2
+
+                        match noteType % 4 with
+                        | 0 -> mkEvent (OjnEventKind.Note(lane, OjnNoteKind.Normal)) :: acc
+                        | 2 -> mkEvent (OjnEventKind.Note(lane, OjnNoteKind.HoldStart)) :: acc
+                        | 3 -> mkEvent (OjnEventKind.Note(lane, OjnNoteKind.HoldEnd)) :: acc
+                        | _ -> acc
 
             readEvents data (offset + 4) bound channel measure total (eventIndex + 1) acc'
 
@@ -149,16 +169,14 @@ module Parse =
         (bound: int)
         (count: int)
         : Result<OjnDifficulty, UrcError> =
-        result {
-            if start < 300 then
-                return! Error(UrcError.syntax start "note section overlaps the header")
-            else
-                let! events = readPackages data start bound count 0 []
-                return { Index = index; Events = events }
-        }
+        if start < 300 then
+            Error(UrcError.syntax start "note section overlaps the header")
+        else
+            readPackages data start bound count 0 []
+            |> Result.map (fun events -> { Index = index; Events = events })
 
     /// Parses a plain or encrypted ("new" magic) OJN file into its source model.
-    let parseOjn (bytes: byte[]) : Result<OjnFile, UrcError> =
+    let parse (bytes: byte[]) : Result<OjnFile, UrcError> =
         result {
             let data =
                 if bytes.Length >= 8 && bytes[0] = 0x6euy && bytes[1] = 0x65uy && bytes[2] = 0x77uy then
@@ -184,11 +202,10 @@ module Parse =
                     let! difficulties =
                         [ 0 .. 2 ]
                         |> List.filter (fun index -> packageCounts[index] <> 0)
-                        |> List.map (fun index ->
+                        |> List.traverseResultM (fun index ->
                             let endRaw = if index < 2 then noteOffsets[index + 1] else coverOffset
                             let endBound = min (max endRaw 0) data.Length
                             readDifficulty data index noteOffsets[index] endBound packageCounts[index])
-                        |> Shared.sequence
 
                     if difficulties.IsEmpty then
                         return! Error(UrcError.syntax 0 "no difficulty with note packages")

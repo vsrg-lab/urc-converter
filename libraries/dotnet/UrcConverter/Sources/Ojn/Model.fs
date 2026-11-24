@@ -2,17 +2,27 @@ namespace UrcConverter.Sources.Ojn
 
 module Model =
 
+    /// Note event kind decoded from `type % 4`.
+    [<RequireQualifiedAccess>]
+    type OjnNoteKind =
+        | Normal
+        | HoldStart
+        | HoldEnd
+
+    /// Event payload discriminated by package channel.
+    [<RequireQualifiedAccess>]
+    type OjnEventKind =
+        | MeasureFraction of float
+        | BpmChange of float
+        | Note of lane: int * kind: OjnNoteKind
+
     /// One event of a note-section package, in file order.
     type OjnEvent =
         {
             Measure: int
             /// Package grid position: raw event index over the package total.
             Position: float
-            Channel: int
-            /// f32 payload of channels 0 (measure fraction) and 1 (BPM change).
-            Value: float
-            /// Note kind from `type % 4`: 0 normal, 2 hold, 3 release.
-            Kind: int
+            Kind: OjnEventKind
             /// Byte offset of the event, for error locations.
             Offset: int
         }

@@ -1,21 +1,38 @@
 ﻿namespace UrcConverter.Parser
 
+open FsToolkit.ErrorHandling
 open UrcConverter
 open UrcConverter.Parser.State
 
 module internal Checks =
 
-    let private checkMetadataComplete (state: ParseState) line =
-        let missing =
-            Strings.metadataFields
-            |> List.tryFind (fun name ->
-                not (List.exists (fun (key, _) -> key = name) state.Metadata))
+    let private requireMetadataField (fields: Map<string, string>) (name: string) (line: int) =
+        Map.tryFind name fields
+        |> Result.requireSome (UrcError.Rule(4, line, $"Metadata is missing field: {name}"))
 
-        match missing with
-        | Some name -> Error(UrcError.Rule(4, line, $"Metadata is missing field: {name}"))
-        | None -> Ok()
+    let private checkMetadataComplete (state: ParseState) line : Result<ParseState, UrcError> =
+        result {
+            let! original = requireMetadataField state.Metadata "Original" line
+            let! title = requireMetadataField state.Metadata "Title" line
+            let! artist = requireMetadataField state.Metadata "Artist" line
+            let! creator = requireMetadataField state.Metadata "Creator" line
+            let! version = requireMetadataField state.Metadata "Version" line
 
-    let private checkJudgment (state: ParseState) line =
+            return
+                { state with
+                    ValidatedMetadata =
+                        Some
+                            {
+                                Original = original
+                                Title = title
+                                Artist = artist
+                                Creator = creator
+                                Version = version
+                            }
+                }
+        }
+
+    let private checkJudgment (state: ParseState) line : Result<ParseState, UrcError> =
         match state.Windows, state.Rates with
         | None, _
         | _, None -> Error(UrcError.Rule(4, line, "Judgment requires both Window and Rate"))
@@ -35,32 +52,51 @@ module internal Checks =
             elif rates |> List.exists (fun rate -> rate < 0.0 || rate > 100.0) then
                 Error(UrcError.Rule(10, line, "Rate values must be in 0-100"))
             else
-                Ok()
+                Ok
+                    { state with
+                        ValidatedJudgment = Some { Windows = windows; Rates = rates }
+                    }
 
-    let private checkLayout (state: ParseState) line =
+    let private checkLayout (state: ParseState) line : Result<ParseState, UrcError> =
         match state.LayoutType with
         | None -> Error(UrcError.Rule(4, line, "Layout is missing field: Type"))
         | Some(keys, specialKeys) ->
-            if not state.SpecialSeen then
+            match state.Special with
+            | SpecialField.Unseen ->
                 Error(UrcError.Rule(4, line, "Layout is missing field: Special"))
-            else
-                match state.Special with
-                | None -> Ok()
-                | Some lanes ->
-                    let total = keys + specialKeys
+            | SpecialField.NoneExplicit ->
+                Ok
+                    { state with
+                        ValidatedLayout =
+                            Some
+                                {
+                                    Keys = keys
+                                    SpecialKeys = specialKeys
+                                    SpecialLanes = None
+                                }
+                    }
+            | SpecialField.Lanes lanes ->
+                let total = keys + specialKeys
 
-                    lanes
-                    |> List.tryFind (fun lane -> lane < 0 || lane >= total)
-                    |> function
-                        | Some lane ->
-                            Error(UrcError.Rule(12, line, $"special lane out of range: {lane}"))
-                        | None ->
-                            if List.length (List.distinct lanes) <> List.length lanes then
-                                Error(UrcError.Rule(13, line, "duplicate special lanes"))
-                            else
-                                Ok()
+                match lanes |> List.tryFind (fun lane -> lane < 0 || lane >= total) with
+                | Some lane ->
+                    Error(UrcError.Rule(12, line, $"special lane out of range: {lane}"))
+                | None ->
+                    if List.length (List.distinct lanes) <> List.length lanes then
+                        Error(UrcError.Rule(13, line, "duplicate special lanes"))
+                    else
+                        Ok
+                            { state with
+                                ValidatedLayout =
+                                    Some
+                                        {
+                                            Keys = keys
+                                            SpecialKeys = specialKeys
+                                            SpecialLanes = Some lanes
+                                        }
+                            }
 
-    let finalizeSection (state: ParseState) section line =
+    let finalizeSection (state: ParseState) section line : Result<ParseState, UrcError> =
         match section with
         | Section.Metadata -> checkMetadataComplete state line
         | Section.Judgment -> checkJudgment state line
@@ -69,4 +105,4 @@ module internal Checks =
             Error(UrcError.Rule(14, line, "first timing point must be at timestamp 0"))
         | Section.UrcHeader
         | Section.Notes
-        | Section.Timing -> Ok()
+        | Section.Timing -> Ok state

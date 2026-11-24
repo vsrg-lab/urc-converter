@@ -1,9 +1,9 @@
 /**
  * Note data parsing for StepMania simfiles.
  */
+import { UrcError } from "../../error.js";
 import type { SmNote } from "./model.js";
 import { rows } from "./preprocess.js";
-import { UrcError } from "../../error.js";
 
 /**
  * Parses raw StepMania note data into SmNote events.

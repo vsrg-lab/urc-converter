@@ -2,6 +2,11 @@
 
 pub const SYNTAX: &str = "syntax";
 pub const UNSUPPORTED_VERSION: &str = "unsupported-version";
+pub const ZERO_LENGTH_HOLD: &str = "zero-length-hold";
+pub const INVALID_RATE: &str = "invalid-rate";
+
+pub const WARNING_NOTE_GAP_CLAMPED: &str = "note-gap-clamped";
+pub const WARNING_HOLD_LENGTH_CLAMPED: &str = "hold-length-clamped";
 
 pub const SECTION_URC: &str = "@URC";
 pub const SECTION_METADATA: &str = "@Metadata";

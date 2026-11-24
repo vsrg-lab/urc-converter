@@ -1,8 +1,8 @@
 /**
  * SMLoader timing preprocessing and note filtering for StepMania simfiles.
  */
-import type { SmNote, Timing } from "./model.js";
 import { UrcError } from "../../error.js";
+import type { SmNote, Timing } from "./model.js";
 
 const FAST_BPM_WARP = 9999999;
 

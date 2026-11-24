@@ -1,4 +1,6 @@
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using UrcConverter.Gui.Services;
 using UrcConverter.Gui.ViewModels;
 using Wpf.Ui.Controls;
@@ -11,6 +13,15 @@ public partial class MainWindow : FluentWindow
 	{
 		InitializeComponent();
 		DataContext = new MainWindowViewModel(new DialogService(this));
+	}
+
+	private void RateTextBox_KeyDown(object sender, KeyEventArgs e)
+	{
+		if (e.Key == Key.Enter && sender is System.Windows.Controls.TextBox textBox)
+		{
+			textBox.GetBindingExpression(System.Windows.Controls.TextBox.TextProperty)?.UpdateSource();
+			e.Handled = true;
+		}
 	}
 
 	private void Window_DragOver(object sender, DragEventArgs e)

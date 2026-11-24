@@ -2,16 +2,16 @@ namespace UrcConverter.Parser
 
 open System.Globalization
 open System.IO
-open FsToolkit.ErrorHandling
 open UrcConverter
 open UrcConverter.Parser.State
 
-module Scan =
+module internal Scan =
 
     let private parseVersion (text: string) : Version option =
         if text.StartsWith("@URC ") then
             let ver = text.Substring(5).Trim()
             let parts = ver.Split('.')
+
             if parts.Length = 2 then
                 match System.Int32.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture),
                       System.Int32.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture) with
@@ -79,10 +79,12 @@ module Scan =
 
         let rec loop lineNumber state current =
             let raw = reader.ReadLine()
+
             if isNull raw then
                 Ok(lineNumber, state, current)
             else
                 let trimmed = raw.Trim()
+
                 if lineNumber = 1 then
                     match header trimmed 1 state with
                     | Ok nextState -> loop 2 nextState current
@@ -93,8 +95,8 @@ module Scan =
                     | SectionName name ->
                         match Checks.finalizeSection state current lineNumber with
                         | Error err -> Error err
-                        | Ok () ->
-                            match sectionHeader name lineNumber state with
+                        | Ok finalized ->
+                            match sectionHeader name lineNumber finalized with
                             | Ok(nextState, nextSection) -> loop (lineNumber + 1) nextState nextSection
                             | Error err -> Error err
                     | Content field ->
@@ -105,4 +107,4 @@ module Scan =
         loop 1 initial Section.UrcHeader
         |> Result.bind (fun (endLine, state, current) ->
             Checks.finalizeSection state current endLine
-            |> Result.bind (fun () -> Assembly.build state endLine))
+            |> Result.bind (fun finalized -> Assembly.build finalized endLine))

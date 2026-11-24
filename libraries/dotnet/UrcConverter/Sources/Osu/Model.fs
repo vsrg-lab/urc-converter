@@ -10,12 +10,16 @@ module Model =
             Uninherited: bool
         }
 
+    [<RequireQualifiedAccess>]
+    type HitObjectKind =
+        | Tap
+        | Hold of endTime: int
+
     type HitObject =
         {
             X: int
             Time: int
-            IsHold: bool
-            EndTime: int option
+            Kind: HitObjectKind
         }
 
     type Beatmap =
@@ -32,3 +36,18 @@ module Model =
             TimingPoints: TimingPoint list
             HitObjects: HitObject list
         }
+
+        static member Empty =
+            {
+                Mode = 3
+                Title = None
+                TitleUnicode = None
+                Artist = None
+                ArtistUnicode = None
+                Creator = None
+                Version = None
+                CircleSize = None
+                OverallDifficulty = None
+                TimingPoints = []
+                HitObjects = []
+            }

@@ -3,6 +3,7 @@
  */
 import { UrcError } from "../../error.js";
 import type { Chart, NoteType } from "../../model.js";
+import { ZERO_LENGTH_HOLD } from "../../strings.js";
 import { buildTiming, checkHoldOverlap, roundMs } from "../shared.js";
 import type { OjnDifficulty, OjnFile } from "./model.js";
 
@@ -66,15 +67,19 @@ function convertChart(file: OjnFile, difficulty: OjnDifficulty): Chart {
 		} else if (event.channel === 1) {
 			bpmPoints.push([roundMs(time), canonicalBpm(event.value), meter[0], meter[1]]);
 			bpm = event.value;
-		} else 
-			addNote(notes, holds, roundMs(time), event.channel - 2, event.kind);
-		
+		} else
+			addNote(notes, holds, roundMs(time), event.channel - 2, event.kind, event.offset);
 	}
 	for (const index of holds.values())
 		notes[index][2] = "N";
 
-	const noteTimes = notes.filter(([, , type]) => type !== "LE").map(([time]) => time);
-	const firstNoteTime = noteTimes.length > 0 ? Math.min(...noteTimes) : 0;
+	let firstNoteTime = 0;
+	let hasNote = false;
+	for (const [time, , type] of notes)
+		if (type !== "LE" && (!hasNote || time < firstNoteTime)) {
+			firstNoteTime = time;
+			hasNote = true;
+		}
 
 	const timingPoints = buildTiming(
 		bpmPoints,
@@ -115,7 +120,8 @@ function addNote(
 	holds: Map<number, number>,
 	ms: number,
 	lane: number,
-	kind: number
+	kind: number,
+	offset: number
 ): void {
 	if (kind === 3) {
 		const index = holds.get(lane);
@@ -123,9 +129,12 @@ function addNote(
 			return;
 		holds.delete(lane);
 		if (ms <= notes[index][0])
-			notes[index][2] = "N";
-		else
-			notes.push([ms, lane, "LE"]);
+			throw new UrcError(
+				ZERO_LENGTH_HOLD,
+				offset,
+				`zero-length hold on lane ${lane} at ${notes[index][0]}ms`
+			);
+		notes.push([ms, lane, "LE"]);
 		return;
 	}
 	if (holds.has(lane))

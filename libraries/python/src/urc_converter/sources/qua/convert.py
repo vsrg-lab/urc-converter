@@ -2,6 +2,7 @@
 
 from ...error import UrcError
 from ...model import Chart, Layout, Metadata, Note, NoteType, Version
+from ...strings import ZERO_LENGTH_HOLD
 from .._shared import build_timing, check_hold_overlap, first_downbeat_after
 from .model import QuaMap
 
@@ -40,6 +41,12 @@ def convert_qua(qua: QuaMap) -> Chart:
 		if obj.end_time and obj.end_time < obj.start_time:
 			raise UrcError(
 				"syntax", 1, f"hold ends before it starts: {obj.end_time} < {obj.start_time}"
+			)
+		if obj.end_time and obj.end_time == obj.start_time:
+			raise UrcError(
+				ZERO_LENGTH_HOLD,
+				1,
+				f"zero-length hold on lane {lane} at {obj.start_time}ms",
 			)
 
 		if obj.end_time:

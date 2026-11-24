@@ -7,7 +7,7 @@ pub type Result<T> = core::result::Result<T, UrcError>;
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{category} at line {line}: {message}")]
 pub struct UrcError {
-    /// `"syntax"`, `"unsupported-version"`, or `"rule:<n>"`.
+    /// `"syntax"`, `"unsupported-version"`, `"zero-length-hold"`, `"invalid-rate"`, or `"rule:<n>"`.
     pub category: String,
     /// 1-based line where the failure was detected.
     pub line: u32,

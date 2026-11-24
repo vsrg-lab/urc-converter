@@ -1,8 +1,8 @@
 /**
  * Parser for O2Jam (.ojn) chart binaries.
  */
-import type { OjnDifficulty, OjnEvent, OjnFile } from "./model.js";
 import { UrcError } from "../../error.js";
+import type { OjnDifficulty, OjnEvent, OjnFile } from "./model.js";
 
 const STRING_RANGES: ReadonlyArray<readonly [number, number]> = [
 	[108, 172],

@@ -69,50 +69,27 @@ module internal Assembly =
             Strings.requiredSections
             |> List.tryFind (fun name -> not (Set.contains name state.Seen))
 
-        match missingSection with
-        | Some name -> Error(UrcError.Rule(2, endLine, $"missing required section: {name}"))
-        | None ->
-            let keys, specialKeys =
-                match state.LayoutType with
-                | Some(keys, specialKeys) -> keys, specialKeys
-                | None -> invalidOp "Layout Type must exist after rule 4 validation"
-
-            let totalLanes = keys + specialKeys
+        match missingSection, state.ValidatedMetadata, state.ValidatedLayout with
+        | Some name, _, _ -> Error(UrcError.Rule(2, endLine, $"missing required section: {name}"))
+        | None, None, _ ->
+            Error(UrcError.Rule(2, endLine, $"missing required section: {Strings.sectionMetadata}"))
+        | None, _, None ->
+            Error(UrcError.Rule(2, endLine, $"missing required section: {Strings.sectionLayout}"))
+        | None, Some metadata, Some layout ->
             let ordered =
-                state.Notes |> List.rev |> List.sortBy (fun raw -> raw.Timestamp, raw.Lane)
+                state.Notes
+                |> List.rev
+                |> List.indexed
+                |> List.sortBy (fun (index, raw) -> raw.Timestamp, raw.Lane, index)
+                |> List.map snd
 
-            validateNotes totalLanes Map.empty [] ordered
+            validateNotes layout.TotalLanes Map.empty [] ordered
             |> Result.map (fun revNotes ->
-                let judgment =
-                    match state.Windows, state.Rates with
-                    | None, _ -> None
-                    | Some windows, Some rates -> Some { Windows = windows; Rates = rates }
-                    | Some _, None ->
-                        invalidOp "Judgment Rate must exist after rule 4 validation"
-
-                let metadataValue name =
-                    match List.tryFind (fun (key, _) -> key = name) state.Metadata with
-                    | Some(_, value) -> value
-                    | None ->
-                        invalidOp $"Metadata field '{name}' must exist after rule 4 validation"
-
                 {
                     FormatVersion = state.Version
-                    Metadata =
-                        {
-                            Original = metadataValue "Original"
-                            Title = metadataValue "Title"
-                            Artist = metadataValue "Artist"
-                            Creator = metadataValue "Creator"
-                            Version = metadataValue "Version"
-                        }
-                    Judgment = judgment
-                    Layout =
-                        {
-                            Keys = keys
-                            SpecialKeys = specialKeys
-                            SpecialLanes = state.Special
-                        }
+                    Metadata = metadata
+                    Judgment = state.ValidatedJudgment
+                    Layout = layout
                     TimingPoints = List.rev state.TimingPoints
                     Notes = List.rev revNotes
                 })

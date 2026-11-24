@@ -27,6 +27,11 @@ public sealed record StructuredError(string Category, int Line, string Message)
 	public override string ToString() => $"{Category} at line {Line}: {Message}";
 }
 
+public sealed record StructuredWarning(string Code, int Lane, int OriginalMs, int AdjustedMs, string Message)
+{
+	public override string ToString() => $"[{Code}] {Message}";
+}
+
 public sealed record ChartSummary(
 	string FormatVersion,
 	string Title,
@@ -36,6 +41,9 @@ public sealed record ChartSummary(
 	string Original,
 	int Keys,
 	int SpecialKeys,
+	double MinBpm,
+	double MaxBpm,
+	double Rate,
 	int TimingPoints,
 	int NotesNormal,
 	int NotesHoldStart,
@@ -44,6 +52,15 @@ public sealed record ChartSummary(
 	int NotesFake)
 {
 	public int TotalNotes => NotesNormal + NotesHoldStart + NotesHoldEnd + NotesMine + NotesFake;
+
+	public string LayoutText => SpecialKeys > 0 ? $"{Keys}+{SpecialKeys}K" : $"{Keys}K";
+
+	public string BpmText =>
+		TimingPoints == 0
+			? "—"
+			: Math.Abs(MinBpm - MaxBpm) < 1e-6
+				? $"{MinBpm:0.##} BPM"
+				: $"{MinBpm:0.##}–{MaxBpm:0.##} BPM";
 
 	public override string ToString()
 	{
@@ -56,16 +73,27 @@ public sealed record ChartSummary(
 			$"Chart:    {ChartVersion}",
 			$"Original: {Original}",
 			$"Layout:   {layout}",
+			$"BPM:      {BpmText}",
 			$"Timing:   {TimingPoints} points",
 			$"Notes:    {TotalNotes} (N: {NotesNormal}, LS: {NotesHoldStart}, LE: {NotesHoldEnd}, M: {NotesMine}, F: {NotesFake})");
 	}
 }
 
-public sealed record LoadedChart(ChartItem Item, ChartSummary Summary, string UrcText);
+public sealed record LoadedChart(
+	ChartItem Item,
+	Chart BaseChart,
+	ChartSummary Summary,
+	string UrcText,
+	IReadOnlyList<StructuredWarning> Warnings);
 
 /// <summary>Everything produced by loading one file. For URC sources,
-/// <see cref="SourceText"/> holds the original file and feeds the preview.</summary>
+/// <see cref="SourceText"/> holds the original file when unmodified.</summary>
 public sealed record LoadResult(SourceKind Kind, string SourceText, IReadOnlyList<LoadedChart> Charts);
+
+public sealed record ScaledChartView(
+	ChartSummary Summary,
+	string UrcText,
+	IReadOnlyList<StructuredWarning> Warnings);
 
 public abstract record Outcome<T>
 {
@@ -94,7 +122,7 @@ public static class ConverterService
 		};
 	}
 
-	public static Outcome<LoadResult> Load(string path, BmsOptions bms)
+	public static Outcome<LoadResult> Load(string path, BmsOptions bms, double rate = 1.0)
 	{
 		var kind = DetectKind(path);
 		if (kind is null)
@@ -108,20 +136,22 @@ public static class ConverterService
 			return kind.Value switch
 			{
 				SourceKind.Osu => ConvertSingle(
-					kind.Value, Sources.Osu.Parse.parse(ReadText(path)), Sources.Osu.Convert.convert),
+					kind.Value, Sources.Osu.Parse.parse(ReadText(path)), Sources.Osu.Convert.convert, rate),
 				SourceKind.Qua => ConvertSingle(
-					kind.Value, Sources.Qua.Parse.parse(ReadText(path)), Sources.Qua.Convert.convert),
+					kind.Value, Sources.Qua.Parse.parse(ReadText(path)), Sources.Qua.Convert.convert, rate),
 				SourceKind.Bms => ConvertSingle(
 					kind.Value,
-					Sources.Bms.Parse.parseBms(File.ReadAllBytes(path), ToParseOptions(path, bms)),
-					Sources.Bms.Convert.convertBms),
+					Sources.Bms.Parse.parse(File.ReadAllBytes(path), ToParseOptions(path, bms)),
+					Sources.Bms.Convert.convert,
+					rate),
 				SourceKind.Sm => ConvertList(
-					kind.Value, Sources.Sm.Parse.parseSm(ReadText(path)), Sources.Sm.Convert.convertSm),
+					kind.Value, Sources.Sm.Parse.parse(ReadText(path)), Sources.Sm.Convert.convert, rate),
 				SourceKind.Ojn => ConvertList(
 					kind.Value,
-					Sources.Ojn.Parse.parseOjn(File.ReadAllBytes(path)),
-					Sources.Ojn.Convert.convertOjn),
-				SourceKind.Urc => LoadUrc(path),
+					Sources.Ojn.Parse.parse(File.ReadAllBytes(path)),
+					Sources.Ojn.Convert.convert,
+					rate),
+				SourceKind.Urc => LoadUrc(path, rate),
 				_ => throw new InvalidOperationException($"unhandled kind {kind}"),
 			};
 		}
@@ -129,6 +159,20 @@ public static class ConverterService
 		{
 			return new Outcome<LoadResult>.Fail(new StructuredError("io", 0, ex.Message));
 		}
+	}
+
+	public static Outcome<ScaledChartView> ApplyRate(Chart baseChart, double rate)
+	{
+		var scaled = Urc.scaleRate(baseChart, rate);
+		if (!scaled.IsOk)
+		{
+			return new Outcome<ScaledChartView>.Fail(ToError(scaled.ErrorValue));
+		}
+
+		var result = scaled.ResultValue;
+		var warnings = result.Warnings.Select(ToWarning).ToArray();
+		var summary = BuildSummary(result.Chart, rate);
+		return new Outcome<ScaledChartView>.Ok(new ScaledChartView(summary, Urc.write(result.Chart), warnings));
 	}
 
 	private static string ReadText(string path) => File.ReadAllText(path, Encoding.UTF8);
@@ -146,7 +190,8 @@ public static class ConverterService
 	private static Outcome<LoadResult> ConvertSingle<TSource>(
 		SourceKind kind,
 		FSharpResult<TSource, UrcError> parsed,
-		Func<TSource, FSharpResult<Chart, UrcError>> convert)
+		Func<TSource, FSharpResult<Chart, UrcError>> convert,
+		double rate)
 	{
 		if (!parsed.IsOk)
 		{
@@ -159,13 +204,14 @@ public static class ConverterService
 			return new Outcome<LoadResult>.Fail(ToError(converted.ErrorValue));
 		}
 
-		return new Outcome<LoadResult>.Ok(new LoadResult(kind, "", [ToLoaded(0, converted.ResultValue)]));
+		return BuildLoaded(kind, "", [converted.ResultValue], rate);
 	}
 
 	private static Outcome<LoadResult> ConvertList<TSource>(
 		SourceKind kind,
 		FSharpResult<TSource, UrcError> parsed,
-		Func<TSource, FSharpResult<FSharpList<Chart>, UrcError>> convert)
+		Func<TSource, FSharpResult<FSharpList<Chart>, UrcError>> convert,
+		double rate)
 	{
 		if (!parsed.IsOk)
 		{
@@ -178,36 +224,63 @@ public static class ConverterService
 			return new Outcome<LoadResult>.Fail(ToError(converted.ErrorValue));
 		}
 
-		return new Outcome<LoadResult>.Ok(new LoadResult(
-			kind,
-			"",
-			converted.ResultValue.Select((chart, index) => ToLoaded(index, chart)).ToArray()));
+		return BuildLoaded(kind, "", converted.ResultValue.ToArray(), rate);
 	}
 
-	private static Outcome<LoadResult> LoadUrc(string path)
+	private static Outcome<LoadResult> LoadUrc(string path, double rate)
 	{
 		var text = ReadText(path);
-		var parsed = Parser.Scan.parse(text);
+		var parsed = Urc.parse(text);
 		if (!parsed.IsOk)
 		{
 			return new Outcome<LoadResult>.Fail(ToError(parsed.ErrorValue));
 		}
 
-		return new Outcome<LoadResult>.Ok(new LoadResult(
-			SourceKind.Urc, text, [ToLoaded(0, parsed.ResultValue)]));
+		return BuildLoaded(SourceKind.Urc, text, [parsed.ResultValue], rate);
+	}
+
+	private static Outcome<LoadResult> BuildLoaded(
+		SourceKind kind,
+		string sourceText,
+		IReadOnlyList<Chart> baseCharts,
+		double rate)
+	{
+		var loaded = new List<LoadedChart>(baseCharts.Count);
+		for (int index = 0; index < baseCharts.Count; index++)
+		{
+			var baseChart = baseCharts[index];
+			var scaled = ApplyRate(baseChart, rate);
+			if (scaled is Outcome<ScaledChartView>.Fail fail)
+			{
+				return new Outcome<LoadResult>.Fail(fail.Error);
+			}
+
+			var view = ((Outcome<ScaledChartView>.Ok)scaled).Value;
+			string name = baseChart.Metadata.Version;
+			if (string.IsNullOrEmpty(name))
+			{
+				name = index == 0 ? "Main" : $"Chart {index + 1}";
+			}
+
+			loaded.Add(new LoadedChart(
+				new ChartItem(index, name),
+				baseChart,
+				view.Summary,
+				view.UrcText,
+				view.Warnings));
+		}
+
+		return new Outcome<LoadResult>.Ok(new LoadResult(kind, sourceText, loaded));
 	}
 
 	private static StructuredError ToError(UrcError error) =>
 		new(error.Category, error.Line, error.Message);
 
-	private static LoadedChart ToLoaded(int index, Chart chart)
-	{
-		string name = chart.Metadata.Version;
-		if (string.IsNullOrEmpty(name))
-		{
-			name = index == 0 ? "Main" : $"Chart {index + 1}";
-		}
+	private static StructuredWarning ToWarning(UrcWarning warning) =>
+		new(warning.Code, warning.Lane, warning.OriginalMs, warning.AdjustedMs, warning.Message);
 
+	private static ChartSummary BuildSummary(Chart chart, double rate)
+	{
 		int normal = 0, holdStart = 0, holdEnd = 0, mine = 0, fake = 0;
 		foreach (var note in chart.Notes)
 		{
@@ -218,7 +291,24 @@ public static class ConverterService
 			else fake++;
 		}
 
-		var summary = new ChartSummary(
+		double minBpm = 0, maxBpm = 0;
+		bool firstTiming = true;
+		foreach (var tp in chart.TimingPoints)
+		{
+			if (firstTiming)
+			{
+				minBpm = tp.Bpm;
+				maxBpm = tp.Bpm;
+				firstTiming = false;
+			}
+			else
+			{
+				if (tp.Bpm < minBpm) minBpm = tp.Bpm;
+				if (tp.Bpm > maxBpm) maxBpm = tp.Bpm;
+			}
+		}
+
+		return new ChartSummary(
 			$"{chart.FormatVersion.Major}.{chart.FormatVersion.Minor}",
 			chart.Metadata.Title,
 			chart.Metadata.Artist,
@@ -227,9 +317,14 @@ public static class ConverterService
 			chart.Metadata.Original,
 			chart.Layout.Keys,
 			chart.Layout.SpecialKeys,
+			minBpm,
+			maxBpm,
+			rate,
 			chart.TimingPoints.Length,
-			normal, holdStart, holdEnd, mine, fake);
-
-		return new LoadedChart(new ChartItem(index, name), summary, Writer.write(chart));
+			normal,
+			holdStart,
+			holdEnd,
+			mine,
+			fake);
 	}
 }

@@ -4,6 +4,11 @@
 
 export const SYNTAX = "syntax";
 export const UNSUPPORTED_VERSION = "unsupported-version";
+export const ZERO_LENGTH_HOLD = "zero-length-hold";
+export const INVALID_RATE = "invalid-rate";
+
+export const WARNING_NOTE_GAP_CLAMPED = "note-gap-clamped";
+export const WARNING_HOLD_LENGTH_CLAMPED = "hold-length-clamped";
 
 export const SECTIONS = ["@URC", "@Metadata", "@Judgment", "@Layout", "@Timing", "@Notes"] as const;
 export const [

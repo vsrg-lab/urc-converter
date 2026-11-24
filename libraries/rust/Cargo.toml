@@ -1,6 +1,6 @@
 [package]
 name = "urc-converter"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "URC (Universal Rhythm Chart) parser and converter library"
 license = "MIT"
@@ -12,6 +12,6 @@ readme = "README.md"
 name = "urc_converter"
 
 [dependencies]
-encoding_rs = "0.8.35"
+encoding_rs = "0.8.44"
 thiserror = "2"
-yaml-rust2 = "0.12.0"
+yaml-rust2 = "0.13.2"

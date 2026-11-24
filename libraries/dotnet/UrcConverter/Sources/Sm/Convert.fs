@@ -1,5 +1,6 @@
 namespace UrcConverter.Sources.Sm
 
+[<RequireQualifiedAccess>]
 module Convert =
 
     open FsToolkit.ErrorHandling
@@ -7,22 +8,10 @@ module Convert =
     open UrcConverter.Sources
     open UrcConverter.Sources.Sm.Model
     open UrcConverter.Sources.Sm.Notes
-    open UrcConverter.Sources.Sm.Parse
     open Preprocess
 
     [<Literal>]
     let private MeasureRows = 192
-
-    let private typeRank =
-        function
-        | NoteType.N -> 0
-        | NoteType.LS -> 1
-        | NoteType.LE -> 2
-        | NoteType.M -> 3
-        | NoteType.F -> 4
-
-
-    // --- timing walk --------------------------------------------------------
 
     type private Entry =
         {
@@ -48,8 +37,7 @@ module Convert =
             Bpm: float option
             Meter: int * int
             Multiplier: float
-            Warping: bool
-            WarpDest: int
+            WarpDest: int option
             PrevRow: int option
             HeadTimes: Map<int, float>
             TailTimes: Map<int, float>
@@ -58,12 +46,10 @@ module Convert =
             Anchors: int list
         }
 
-    // --- chart conversion ---------------------------------------------------
-
     let private convertChart (simfile: SmFile) (chart: SmChart) : Result<Chart, UrcError> =
         result {
-            let! lanes = resolveLanes chart.StepsType
-            let timing = match chart.Timing with Some timing -> timing | None -> simfile.Timing
+            let! lanes = Parse.resolveLanes chart.StepsType
+            let timing = chart.Timing |> Option.defaultValue simfile.Timing
             let! offset, bpmSegs, stopSegs, warpSegs = preprocess timing
             let intervals = warpIntervals (warpSegs @ timing.Warps)
             let notes = filterNotes chart.Notes intervals
@@ -96,7 +82,7 @@ module Convert =
                         yield { Row = rowsOf beat; Priority = 6; Kind = ScrollEvent ratio }
                 ]
 
-            let maxRow = entries |> List.map (fun entry -> entry.Row) |> List.fold max 0
+            let maxRow = entries |> List.fold (fun acc entry -> max acc entry.Row) 0
 
             let anchorEntries =
                 [
@@ -104,8 +90,7 @@ module Convert =
                         { Row = row; Priority = 2; Kind = AnchorEvent }
                 ]
 
-            let entries =
-                anchorEntries @ entries |> List.sortBy (fun entry -> entry.Row, entry.Priority)
+            let entries = anchorEntries @ entries |> List.sortBy (fun entry -> entry.Row, entry.Priority)
 
             let initial =
                 {
@@ -113,8 +98,7 @@ module Convert =
                     Bpm = None
                     Meter = (4, 4)
                     Multiplier = 1.0
-                    Warping = false
-                    WarpDest = 0
+                    WarpDest = None
                     PrevRow = None
                     HeadTimes = Map.empty
                     TailTimes = Map.empty
@@ -125,79 +109,73 @@ module Convert =
 
             let walk (state: WalkState) (row: int, evts: Entry list) : WalkState =
                 let advanced =
-                    match state.PrevRow, state.Bpm with
-                    | Some prevRow, Some bpm when not state.Warping ->
-                        {
-                            state with
-                                Seconds = state.Seconds + float (row - prevRow) / 48.0 * 60.0 / bpm
+                    match state.PrevRow, state.Bpm, state.WarpDest with
+                    | Some prevRow, Some bpm, None ->
+                        { state with
+                            Seconds = state.Seconds + float (row - prevRow) / 48.0 * 60.0 / bpm
                         }
                     | _ -> state
 
                 let entered =
-                    if advanced.Warping && row >= advanced.WarpDest then
-                        { advanced with Warping = false }
-                    else
-                        advanced
+                    match advanced.WarpDest with
+                    | Some dest when row >= dest -> { advanced with WarpDest = None }
+                    | _ -> advanced
 
                 let grouped =
                     evts
                     |> List.fold
-                        (fun (state: WalkState) (entry: Entry) ->
+                        (fun (s: WalkState) (entry: Entry) ->
                             match entry.Kind with
                             | WarpEvent dest ->
-                                if state.Warping then
-                                    { state with WarpDest = max state.WarpDest dest }
-                                else
-                                    { state with Warping = true; WarpDest = dest }
-                            | DelayEvent seconds -> { state with Seconds = state.Seconds + seconds }
+                                let nextDest =
+                                    match s.WarpDest with
+                                    | Some current -> max current dest
+                                    | None -> dest
+
+                                { s with WarpDest = Some nextDest }
+                            | DelayEvent seconds -> { s with Seconds = s.Seconds + seconds }
                             | NoteEvent index ->
-                                { state with HeadTimes = Map.add index state.Seconds state.HeadTimes }
-                            | TailEvent index -> { state with TailTimes = Map.add index state.Seconds state.TailTimes }
+                                { s with HeadTimes = Map.add index s.Seconds s.HeadTimes }
+                            | TailEvent index ->
+                                { s with TailTimes = Map.add index s.Seconds s.TailTimes }
                             | AnchorEvent ->
-                                { state with Anchors = Shared.roundMs (state.Seconds * 1000.0) :: state.Anchors }
-                            | StopEvent seconds -> { state with Seconds = state.Seconds + seconds }
-                            | BpmEvent bpm -> { state with Bpm = Some bpm }
+                                { s with Anchors = Shared.roundMs (s.Seconds * 1000.0) :: s.Anchors }
+                            | StopEvent seconds -> { s with Seconds = s.Seconds + seconds }
+                            | BpmEvent bpm -> { s with Bpm = Some bpm }
                             | TimeSigEvent(numerator, denominator) ->
-                                { state with Meter = (numerator, denominator) }
-                            | ScrollEvent ratio -> { state with Multiplier = ratio })
+                                { s with Meter = (numerator, denominator) }
+                            | ScrollEvent ratio -> { s with Multiplier = ratio })
                         entered
 
-                let bpmChanged =
+                let bpmPoints =
                     match grouped.Bpm with
                     | Some bpm when grouped.Bpm <> state.Bpm || grouped.Meter <> state.Meter ->
                         let numerator, denominator = grouped.Meter
                         (Shared.roundMs (grouped.Seconds * 1000.0), bpm, numerator, denominator) :: grouped.BpmPoints
-                        |> Some
-                    | _ -> None
+                    | _ -> grouped.BpmPoints
 
-                let svChanged =
+                let svPoints =
                     if grouped.Multiplier <> state.Multiplier then
-                        Some((Shared.roundMs (grouped.Seconds * 1000.0), grouped.Multiplier) :: grouped.SvPoints)
+                        (Shared.roundMs (grouped.Seconds * 1000.0), grouped.Multiplier) :: grouped.SvPoints
                     else
-                        None
+                        grouped.SvPoints
 
-                {
-                    grouped with
-                        BpmPoints = bpmChanged |> Option.defaultValue grouped.BpmPoints
-                        SvPoints = svChanged |> Option.defaultValue grouped.SvPoints
-                        PrevRow = Some row
+                { grouped with
+                    BpmPoints = bpmPoints
+                    SvPoints = svPoints
+                    PrevRow = Some row
                 }
 
-            let walked =
-                entries
-                |> List.groupBy (fun entry -> entry.Row)
-                |> List.fold walk initial
+            let walked = entries |> List.groupBy _.Row |> List.fold walk initial
 
             let! urcNotes = buildUrcNotes timing notes walked.HeadTimes walked.TailTimes
 
             let firstNoteTime =
-                match
-                    urcNotes
-                    |> List.filter (fun (_, _, kind) -> kind <> NoteType.LE)
-                    |> List.map (fun (time, _, _) -> time)
-                with
-                | [] -> 0
-                | times -> List.min times
+                urcNotes
+                |> List.choose (fun (time, _, kind) -> if kind <> NoteType.LE then Some time else None)
+                |> function
+                    | [] -> 0
+                    | times -> List.min times
 
             let anchors = List.rev walked.Anchors
 
@@ -211,7 +189,7 @@ module Convert =
 
             let ordered =
                 urcNotes
-                |> List.sortBy (fun (time, lane, kind) -> time, lane, typeRank kind)
+                |> List.sortBy (fun (time, lane, kind) -> time, lane, kind)
                 |> List.map (fun (time, lane, kind) ->
                     {
                         TimestampMs = time - firstNoteTime
@@ -253,5 +231,5 @@ module Convert =
         }
 
     /// Converts every chart of a simfile into URC charts.
-    let convertSm (simfile: SmFile) : Result<Chart list, UrcError> =
+    let convert (simfile: SmFile) : Result<Chart list, UrcError> =
         simfile.Charts |> List.traverseResultM (convertChart simfile)

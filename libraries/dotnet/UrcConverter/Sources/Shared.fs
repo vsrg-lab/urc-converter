@@ -1,9 +1,14 @@
 namespace UrcConverter.Sources
 
-open FsToolkit.ErrorHandling
+open System.Text
 open UrcConverter
 
 module internal Shared =
+
+    let private codePages =
+        lazy (Encoding.RegisterProvider(CodePagesEncodingProvider.Instance))
+
+    let ensureCodePages () = codePages.Value
 
     let roundMs (value: float) : int =
         if value >= 0.0 then
@@ -20,25 +25,36 @@ module internal Shared =
             match rest with
             | [] -> None
             | (time, bpm, beats, _) :: tail ->
-                let nextTime = match tail with (next, _, _, _) :: _ -> Some next | [] -> None
+                let nextTime =
+                    match tail with
+                    | (next, _, _, _) :: _ -> Some next
+                    | [] -> None
 
-                if timeMs <= time then Some(roundMs (float time))
+                if timeMs <= time then
+                    Some(roundMs (float time))
                 else
-                    let inSegment = match nextTime with Some next -> timeMs < next | None -> true
+                    let inSegment =
+                        match nextTime with
+                        | Some next -> timeMs < next
+                        | None -> true
+
                     let measureMs = float beats * 60000.0 / bpm
 
                     if inSegment && measureMs > 0.0 then
                         let k = ceil (float (timeMs - time) / measureMs - 1e-9)
                         let anchor = float time + k * measureMs
 
-                        Some(roundMs (match nextTime with Some next -> min anchor (float next) | None -> anchor))
+                        Some(
+                            roundMs (
+                                match nextTime with
+                                | Some next -> min anchor (float next)
+                                | None -> anchor
+                            )
+                        )
                     else
                         loop tail
 
         loop points
-
-    let sequence (results: Result<'a, UrcError> list) : Result<'a list, UrcError> =
-        List.sequenceResultM results
 
     type private TimingEvent =
         | BpmPoint of time: int * index: int * bpm: float * beats: int * noteValue: int
@@ -73,7 +89,8 @@ module internal Shared =
         let events =
             (bpmPoints
              |> List.indexed
-             |> List.map (fun (index, (time, bpm, beats, noteValue)) -> BpmPoint(time, index, bpm, beats, noteValue)))
+             |> List.map (fun (index, (time, bpm, beats, noteValue)) ->
+                 BpmPoint(time, index, bpm, beats, noteValue)))
             @ (svPoints
                |> List.indexed
                |> List.map (fun (index, (time, multiplier)) -> SvPoint(time, index, multiplier)))
@@ -96,11 +113,13 @@ module internal Shared =
             |> List.groupBy (function
                 | BpmPoint(time, _, _, _, _)
                 | SvPoint(time, _, _) -> time)
+
         let folder (state: ScanState) (time, evts) =
             let nextBpm, nextBeats, nextNoteValue, nextMult =
                 evts
                 |> List.fold
-                    (fun (bpm, beats, noteValue, mult) -> function
+                    (fun (bpm, beats, noteValue, mult) ->
+                        function
                         | BpmPoint(_, _, b, bt, nv) -> Some b, bt, nv, mult
                         | SvPoint(_, _, m) -> bpm, beats, noteValue, m)
                     (state.Bpm, state.Beats, state.NoteValue, state.Multiplier)
@@ -129,6 +148,7 @@ module internal Shared =
                         }
                         :: state.Emitted
                 }
+
         let scanState = List.fold folder initial groupedEvents
 
         match List.rev scanState.Emitted with
@@ -145,9 +165,7 @@ module internal Shared =
                         |> Option.defaultValue (List.head emitted)
 
                     let before, after = List.partition (fun point -> point.Time < anchor) emitted
-                    before
-                    @ { active with Time = anchor }
-                      :: after
+                    before @ { active with Time = anchor } :: after
                 | _ -> emitted
 
             let shifted =
@@ -183,7 +201,7 @@ module internal Shared =
     let checkHoldOverlap (notes: Note list) : Result<unit, UrcError> =
         let rec loop (openLanes: Set<int>) (rest: Note list) =
             match rest with
-            | [] -> Ok ()
+            | [] -> Ok()
             | note :: tail ->
                 match note.Type with
                 | NoteType.LS when Set.contains note.Lane openLanes ->
@@ -193,5 +211,7 @@ module internal Shared =
                 | _ -> loop openLanes tail
 
         notes
-        |> List.sortBy (fun note -> note.TimestampMs, note.Lane)
+        |> List.indexed
+        |> List.sortBy (fun (index, note) -> note.TimestampMs, note.Lane, index)
+        |> List.map snd
         |> loop Set.empty

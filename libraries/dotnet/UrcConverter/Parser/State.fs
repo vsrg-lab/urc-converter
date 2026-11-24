@@ -13,6 +13,12 @@ module internal State =
         | Timing
         | Notes
 
+    [<RequireQualifiedAccess>]
+    type SpecialField =
+        | Unseen
+        | NoneExplicit
+        | Lanes of int list
+
     let private allSections =
         [
             Section.UrcHeader
@@ -43,12 +49,14 @@ module internal State =
             Seen: Set<string>
             LastIndex: int
             Version: Version
-            Metadata: (string * string) list
+            Metadata: Map<string, string>
+            ValidatedMetadata: Metadata option
             Windows: float list option
             Rates: float list option
+            ValidatedJudgment: Judgment option
             LayoutType: (int * int) option
-            Special: int list option
-            SpecialSeen: bool
+            Special: SpecialField
+            ValidatedLayout: Layout option
             TimingPoints: TimingPoint list
             Notes: RawNote list
         }
@@ -58,12 +66,14 @@ module internal State =
             Seen = Set.ofList [ Strings.sectionUrc ]
             LastIndex = 0
             Version = { Major = 1; Minor = 1 }
-            Metadata = []
+            Metadata = Map.empty
+            ValidatedMetadata = None
             Windows = None
             Rates = None
+            ValidatedJudgment = None
             LayoutType = None
-            Special = None
-            SpecialSeen = false
+            Special = SpecialField.Unseen
+            ValidatedLayout = None
             TimingPoints = []
             Notes = []
         }

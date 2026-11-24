@@ -17,7 +17,7 @@ module internal Fields =
         | NameValue(name, value) ->
             if not (List.contains name Strings.metadataFields) then
                 Error(UrcError.Rule(6, line, $"unknown metadata field: {name}"))
-            elif List.exists (fun (key, _) -> key = name) state.Metadata then
+            elif Map.containsKey name state.Metadata then
                 Error(UrcError.Syntax(line, $"duplicate metadata field: {name}"))
             else
                 match value.Trim() with
@@ -25,7 +25,7 @@ module internal Fields =
                 | trimmed ->
                     Ok
                         { state with
-                            Metadata = (name, trimmed) :: state.Metadata
+                            Metadata = Map.add name trimmed state.Metadata
                         }
         | _ -> Error(UrcError.Syntax(line, $"expected 'Field: Value', got: '{text}'"))
 
@@ -66,21 +66,19 @@ module internal Fields =
                             Ok { state with LayoutType = Some(keys, specialKeys) }
                         | keys, None -> Ok { state with LayoutType = Some(keys, 0) })
             elif name = Strings.layoutFieldSpecial then
-                if state.SpecialSeen then
+                match state.Special with
+                | SpecialField.NoneExplicit
+                | SpecialField.Lanes _ ->
                     Error(UrcError.Syntax(line, "duplicate layout field: Special"))
-                elif value.Trim() = Strings.specialNone then
-                    Ok
-                        { state with
-                            Special = None
-                            SpecialSeen = true
-                        }
-                else
-                    intList "empty lane in Special list" value line
-                    |> Result.map (fun lanes ->
-                        { state with
-                            Special = Some lanes
-                            SpecialSeen = true
-                        })
+                | SpecialField.Unseen ->
+                    if value.Trim() = Strings.specialNone then
+                        Ok { state with Special = SpecialField.NoneExplicit }
+                    else
+                        intList "empty lane in Special list" value line
+                        |> Result.map (fun lanes ->
+                            { state with
+                                Special = SpecialField.Lanes lanes
+                            })
             else
                 Error(UrcError.Rule(6, line, $"unknown layout field: {name}"))
         | _ -> Error(UrcError.Syntax(line, $"expected 'Field: Value', got: '{text}'"))

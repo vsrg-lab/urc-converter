@@ -2,6 +2,11 @@
 
 SYNTAX = "syntax"
 UNSUPPORTED_VERSION = "unsupported-version"
+ZERO_LENGTH_HOLD = "zero-length-hold"
+INVALID_RATE = "invalid-rate"
+
+WARNING_NOTE_GAP_CLAMPED = "note-gap-clamped"
+WARNING_HOLD_LENGTH_CLAMPED = "hold-length-clamped"
 
 SECTIONS = ("@URC", "@Metadata", "@Judgment", "@Layout", "@Timing", "@Notes")
 (

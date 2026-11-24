@@ -12,6 +12,7 @@ from .strings import (
 	SECTION_METADATA,
 	SECTION_NOTES,
 	SECTION_TIMING,
+	SPECIAL_NONE,
 )
 
 
@@ -36,7 +37,7 @@ def write(chart: Chart) -> str:
 	else:
 		type_text = str(layout.keys)
 	if layout.special_lanes is None:
-		special_text = "None"
+		special_text = SPECIAL_NONE
 	else:
 		special_text = ", ".join(str(lane) for lane in layout.special_lanes)
 	metadata = chart.metadata

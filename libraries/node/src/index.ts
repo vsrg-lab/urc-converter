@@ -1,7 +1,21 @@
 export { UrcError } from "./error.js";
-export type { Chart, Judgment, Layout, Meter, Metadata, Note, NoteType, TimingPoint, Version } from "./model.js";
+export type {
+	Chart,
+	Judgment,
+	Layout,
+	Metadata,
+	Meter,
+	Note,
+	NoteType,
+	RateResult,
+	TimingPoint,
+	UrcWarning,
+	Version,
+	WarningCode
+} from "./model.js";
 export { totalLanes } from "./model.js";
 export { parse } from "./parser/scan.js";
-export { write } from "./writer.js";
+export { scaleRate } from "./rate.js";
 export { bms, ojn, osu, qua, sm } from "./sources/index.js";
 export * as strings from "./strings.js";
+export { write } from "./writer.js";

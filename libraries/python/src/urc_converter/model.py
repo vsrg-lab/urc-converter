@@ -91,3 +91,22 @@ class Chart:
 	layout: Layout
 	timing: list[TimingPoint]
 	notes: list[Note]
+
+
+@dataclass
+class UrcWarning:
+	"""Non-fatal adjustment warning emitted during chart transformation."""
+
+	code: str
+	lane: int
+	original_ms: int
+	adjusted_ms: int
+	message: str
+
+
+@dataclass
+class RateResult:
+	"""Result of playback rate scaling, pairing the adjusted chart with any warnings."""
+
+	chart: Chart
+	warnings: list[UrcWarning]

@@ -1,5 +1,6 @@
 namespace UrcConverter.Sources.Osu
 
+[<RequireQualifiedAccess>]
 module Convert =
 
     open FsToolkit.ErrorHandling
@@ -10,157 +11,144 @@ module Convert =
     let private keyMin, keyMax = 1, 18
     let private judgmentRates = [ 100.0; 100.0; 66.67; 33.33; 16.67; 0.0 ]
 
+    let private nonEmpty (value: string option) =
+        value |> Option.filter (fun text -> text <> "")
+
+    /// Maps an osu!mania beatmap onto a URC chart.
     let convert (beatmap: Beatmap) : Result<Chart, UrcError> =
         result {
             if beatmap.Mode <> 3 then
-                return!
-                    Error(
-                        UrcError.UnsupportedVersion(1, $"unsupported game mode: {beatmap.Mode}")
-                    )
+                return! Error(UrcError.unsupportedVersion 1 $"unsupported game mode: {beatmap.Mode}")
 
-            match beatmap.CircleSize with
-            | None -> return! Error(UrcError.Syntax(1, "missing CircleSize"))
-            | Some circleSize when circleSize <> truncate circleSize ->
-                return!
-                    Error(UrcError.Syntax(1, $"CircleSize must be an integer: {circleSize}"))
-            | Some circleSize ->
-                let keys = int circleSize
+            let! circleSize =
+                beatmap.CircleSize
+                |> Result.requireSome (UrcError.syntax 1 "missing CircleSize")
 
-                if keys < keyMin || keys > keyMax then
-                    return! Error(UrcError.Syntax(1, $"CircleSize out of range: {keys}"))
+            if circleSize <> truncate circleSize then
+                return! Error(UrcError.syntax 1 $"CircleSize must be an integer: {circleSize}")
 
-                if beatmap.TimingPoints |> List.exists (fun point -> point.BeatLength = 0.0) then
-                    return! Error(UrcError.Syntax(1, "timing point with zero beat length"))
+            let keys = int circleSize
 
-                let firstNoteTime =
-                    match beatmap.HitObjects with
-                    | [] -> 0
-                    | objects -> objects |> List.map _.Time |> List.min
+            if keys < keyMin || keys > keyMax then
+                return! Error(UrcError.syntax 1 $"CircleSize out of range: {keys}")
 
-                let bpmPoints =
-                    beatmap.TimingPoints
-                    |> List.choose (fun point ->
-                        if point.Uninherited then
-                            Some(point.Time, 60000.0 / point.BeatLength, point.Meter, 4)
-                        else
-                            None)
+            if beatmap.TimingPoints |> List.exists (fun point -> point.BeatLength = 0.0) then
+                return! Error(UrcError.syntax 1 "timing point with zero beat length")
 
-                let! timing =
-                    Shared.buildTiming
-                        bpmPoints
-                        (beatmap.TimingPoints
-                         |> List.choose (fun point ->
-                             if not point.Uninherited then
-                                 Some(point.Time, -100.0 / point.BeatLength)
-                             else
-                                 None))
-                        firstNoteTime
-                        ".osu"
-                        (Shared.firstDownbeatAfter bpmPoints firstNoteTime)
+            let firstNoteTime =
+                match beatmap.HitObjects with
+                | [] -> 0
+                | objects -> objects |> List.map _.Time |> List.min
 
-                let! notes =
-                    beatmap.HitObjects
-                    |> List.traverseResultM (fun obj ->
-                        let lane = min (max (obj.X * keys / 512) 0) (keys - 1)
+            let bpmPoints =
+                beatmap.TimingPoints
+                |> List.choose (fun point ->
+                    if point.Uninherited then
+                        Some(point.Time, 60000.0 / point.BeatLength, point.Meter, 4)
+                    else
+                        None)
 
-                        match obj.IsHold, obj.EndTime with
-                        | true, Some endTime when endTime < obj.Time ->
-                            Error(
-                                UrcError.Syntax(
-                                    1,
-                                    $"hold ends before it starts: {endTime} < {obj.Time}"
-                                )
-                            )
-                        | true, Some endTime ->
-                            Ok
-                                [
-                                    {
-                                        TimestampMs = obj.Time - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.LS
-                                    }
-                                    {
-                                        TimestampMs = endTime - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.LE
-                                    }
-                                ]
-                        | true, None -> invalidOp "hold hit object must have an end time"
-                        | false, _ ->
-                            Ok
-                                [
-                                    {
-                                        TimestampMs = obj.Time - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.N
-                                    }
-                                ])
-                    |> Result.map List.concat
+            let svPoints =
+                beatmap.TimingPoints
+                |> List.choose (fun point ->
+                    if not point.Uninherited then
+                        Some(point.Time, -100.0 / point.BeatLength)
+                    else
+                        None)
 
-                do! Shared.checkHoldOverlap notes
+            let! timing =
+                Shared.buildTiming
+                    bpmPoints
+                    svPoints
+                    firstNoteTime
+                    ".osu"
+                    (Shared.firstDownbeatAfter bpmPoints firstNoteTime)
 
-                let judgment =
-                    beatmap.OverallDifficulty
-                    |> Option.map (fun od ->
-                        let windows =
-                            16.5
-                            :: [
-                                for baseline in [ 64.0; 97.0; 127.0; 151.0; 188.0 ] ->
-                                    baseline - 3.0 * od + 0.5
+            let! notes =
+                beatmap.HitObjects
+                |> List.traverseResultM (fun obj ->
+                    let lane = min (max (obj.X * keys / 512) 0) (keys - 1)
+
+                    match obj.Kind with
+                    | HitObjectKind.Hold endTime when endTime < obj.Time ->
+                        Error(UrcError.syntax 1 $"hold ends before it starts: {endTime} < {obj.Time}")
+                    | HitObjectKind.Hold endTime when endTime = obj.Time ->
+                        Error(UrcError.zeroLengthHold 1 $"zero-length hold on lane {lane} at {obj.Time}ms")
+                    | HitObjectKind.Hold endTime ->
+                        Ok
+                            [
+                                {
+                                    TimestampMs = obj.Time - firstNoteTime
+                                    Lane = lane
+                                    Type = NoteType.LS
+                                }
+                                {
+                                    TimestampMs = endTime - firstNoteTime
+                                    Lane = lane
+                                    Type = NoteType.LE
+                                }
                             ]
+                    | HitObjectKind.Tap ->
+                        Ok
+                            [
+                                {
+                                    TimestampMs = obj.Time - firstNoteTime
+                                    Lane = lane
+                                    Type = NoteType.N
+                                }
+                            ])
+                |> Result.map List.concat
 
-                        {
-                            Windows = windows
-                            Rates = judgmentRates
-                        })
+            do! Shared.checkHoldOverlap notes
 
-                let title = beatmap.TitleUnicode |> Option.orElse beatmap.Title
-                let artist = beatmap.ArtistUnicode |> Option.orElse beatmap.Artist
+            let judgment =
+                beatmap.OverallDifficulty
+                |> Option.map (fun od ->
+                    let windows =
+                        16.5
+                        :: [
+                            for baseline in [ 64.0; 97.0; 127.0; 151.0; 188.0 ] ->
+                                baseline - 3.0 * od + 0.5
+                        ]
 
-                let metadata =
-                    [
-                        ("Title", title)
-                        ("Artist", artist)
-                        ("Creator", beatmap.Creator)
-                        ("Version", beatmap.Version)
-                    ]
+                    {
+                        Windows = windows
+                        Rates = judgmentRates
+                    })
 
+            let title = nonEmpty beatmap.TitleUnicode |> Option.orElse (nonEmpty beatmap.Title)
+            let artist = nonEmpty beatmap.ArtistUnicode |> Option.orElse (nonEmpty beatmap.Artist)
+            let creator = nonEmpty beatmap.Creator
+            let version = nonEmpty beatmap.Version
+
+            match title, artist, creator, version with
+            | Some title, Some artist, Some creator, Some version ->
+                return
+                    {
+                        FormatVersion = { Major = 1; Minor = 1 }
+                        Metadata =
+                            {
+                                Original = "osu!mania"
+                                Title = title
+                                Artist = artist
+                                Creator = creator
+                                Version = version
+                            }
+                        Judgment = judgment
+                        Layout =
+                            {
+                                Keys = keys
+                                SpecialKeys = 0
+                                SpecialLanes = None
+                            }
+                        TimingPoints = timing
+                        Notes = notes
+                    }
+            | _ ->
                 let missing =
-                    metadata
-                    |> List.choose (fun (name, value) ->
-                        match value with
-                        | Some value when value <> "" -> None
-                        | _ -> Some name)
+                    [ "Title", title; "Artist", artist; "Creator", creator; "Version", version ]
+                    |> List.choose (fun (name, value) -> if Option.isNone value then Some name else None)
+                    |> String.concat ", "
 
-                let missingText = missing |> String.concat ", "
-
-                if not (List.isEmpty missing) then
-                    return! Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
-
-                match title, artist, beatmap.Creator, beatmap.Version with
-                | Some title, Some artist, Some creator, Some version ->
-                    return
-                        {
-                            FormatVersion = { Major = 1; Minor = 1 }
-                            Metadata =
-                                {
-                                    Original = "osu!mania"
-                                    Title = title
-                                    Artist = artist
-                                    Creator = creator
-                                    Version = version
-                                }
-                            Judgment = judgment
-                            Layout =
-                                {
-                                    Keys = keys
-                                    SpecialKeys = 0
-                                    SpecialLanes = None
-                                }
-                            TimingPoints = timing
-                            Notes = notes
-                        }
-                | _ ->
-                    return!
-                        Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
+                return! Error(UrcError.syntax 1 $"missing metadata: {missing}")
         }

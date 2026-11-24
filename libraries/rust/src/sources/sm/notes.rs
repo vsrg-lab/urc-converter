@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use crate::error::{Result, UrcError};
 use crate::model::NoteType;
+use crate::strings::ZERO_LENGTH_HOLD;
 
 use super::super::shared::round_ms;
 use super::model::{NoteKind, SmNote, Timing};
@@ -125,11 +126,18 @@ pub(crate) fn build_urc_notes(
         match note.kind {
             NoteKind::Hold => {
                 let tail_ms = round_ms(tail_times[index] * 1000.0);
-                if tail_ms <= head_ms {
+                if tail_ms < head_ms {
                     return Err(UrcError::new(
                         "syntax",
                         1,
-                        format!("hold on lane {} collapses to zero length", note.track),
+                        format!("hold ends before it starts: {tail_ms} < {head_ms}"),
+                    ));
+                }
+                if tail_ms == head_ms {
+                    return Err(UrcError::new(
+                        ZERO_LENGTH_HOLD,
+                        1,
+                        format!("zero-length hold on lane {} at {head_ms}ms", note.track),
                     ));
                 }
                 urc_notes.push((head_ms, note.track, NoteType::Ls));

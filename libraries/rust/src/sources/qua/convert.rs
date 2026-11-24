@@ -3,6 +3,7 @@
 use crate::error::{Result, UrcError};
 use crate::model::{Chart, Layout, Metadata, Note, NoteType, Version};
 use crate::sources::shared::{build_timing, check_hold_overlap, first_downbeat_after};
+use crate::strings::ZERO_LENGTH_HOLD;
 
 use super::model::QuaMap;
 
@@ -86,6 +87,13 @@ pub fn convert_qua(qua: &QuaMap) -> Result<Chart> {
         }
 
         let lane = lane as u32;
+        if obj.end_time != 0 && obj.end_time == obj.start_time {
+            return Err(UrcError::new(
+                ZERO_LENGTH_HOLD,
+                1,
+                format!("zero-length hold on lane {lane} at {}ms", obj.start_time),
+            ));
+        }
         if obj.end_time != 0 {
             notes.push(Note {
                 timestamp_ms: obj.start_time - first_note_time,
@@ -121,7 +129,7 @@ pub fn convert_qua(qua: &QuaMap) -> Result<Chart> {
         ("DifficultyName", qua.difficulty_name.as_deref()),
     ]
     .into_iter()
-    .filter_map(|(label, value)| value.is_none().then_some(label))
+    .filter_map(|(label, value)| value.is_none_or(str::is_empty).then_some(label))
     .collect();
 
     if !missing.is_empty() {

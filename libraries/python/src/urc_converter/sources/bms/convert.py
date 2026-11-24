@@ -4,6 +4,7 @@ from itertools import groupby
 
 from ...error import UrcError
 from ...model import Chart, Layout, Metadata, Note, NoteType, Version
+from ...strings import ZERO_LENGTH_HOLD
 from .._shared import build_timing, check_hold_overlap, round_ms
 from .model import BmsChart
 
@@ -15,8 +16,8 @@ _SYSTEM_CHANNELS = ("02", "03", "08", "09", "SC")
 _LAYOUTS = {
 	"5K": (5, 1, [0]),
 	"7K": (7, 1, [0]),
-	"10K": (10, 2, [0, 6]),
-	"14K": (14, 2, [0, 8]),
+	"10K": (10, 2, [0, 11]),
+	"14K": (14, 2, [0, 15]),
 	"PMS9": (9, 0, None),
 	"PMS18": (18, 0, None),
 }
@@ -185,8 +186,16 @@ def _build_notes(
 			pending: float | None = None
 			for time, obj in stream:
 				if chart.lnobj is not None and obj == chart.lnobj and pending is not None:
-					notes.append((round_ms(pending / 1000.0), lane, NoteType.LS))
-					notes.append((round_ms(time / 1000.0), lane, NoteType.LE))
+					ls_ms = round_ms(pending / 1000.0)
+					le_ms = round_ms(time / 1000.0)
+					if le_ms <= ls_ms:
+						raise UrcError(
+							ZERO_LENGTH_HOLD,
+							1,
+							f"zero-length hold on lane {lane} at {ls_ms}ms",
+						)
+					notes.append((ls_ms, lane, NoteType.LS))
+					notes.append((le_ms, lane, NoteType.LE))
 					pending = None
 				else:
 					if pending is not None:
@@ -211,15 +220,31 @@ def _pair_long_notes(
 			if start is None:
 				start = time
 			else:
-				notes.append((round_ms(start / 1000.0), lane, NoteType.LS))
-				notes.append((round_ms(time / 1000.0), lane, NoteType.LE))
+				ls_ms = round_ms(start / 1000.0)
+				le_ms = round_ms(time / 1000.0)
+				if le_ms <= ls_ms:
+					raise UrcError(
+						ZERO_LENGTH_HOLD,
+						1,
+						f"zero-length hold on lane {lane} at {ls_ms}ms",
+					)
+				notes.append((ls_ms, lane, NoteType.LS))
+				notes.append((le_ms, lane, NoteType.LE))
 				start = None
 	else:
 		for time, obj in stream:
 			if obj == "00":
 				if start is not None:
-					notes.append((round_ms(start / 1000.0), lane, NoteType.LS))
-					notes.append((round_ms(time / 1000.0), lane, NoteType.LE))
+					ls_ms = round_ms(start / 1000.0)
+					le_ms = round_ms(time / 1000.0)
+					if le_ms <= ls_ms:
+						raise UrcError(
+							ZERO_LENGTH_HOLD,
+							1,
+							f"zero-length hold on lane {lane} at {ls_ms}ms",
+						)
+					notes.append((ls_ms, lane, NoteType.LS))
+					notes.append((le_ms, lane, NoteType.LE))
 					start = None
 			elif start is None:
 				start = time
@@ -263,18 +288,32 @@ def _lane(mode: str, channel: str) -> int | None:
 	side = _SIDE_OF[channel[0]]
 	key = channel[1]
 	if mode in ("5K", "10K"):
+		if side == 0:
+			if key == "6":
+				return 0
+			if "1" <= key <= "5":
+				return int(key)
+			return None
 		if key == "6":
-			return side * 6
+			return 11
 		if "1" <= key <= "5":
-			return int(key) + side * 6
+			return int(key) + 5
 		return None
 	if mode in ("7K", "14K"):
+		if side == 0:
+			if key == "6":
+				return 0
+			if "1" <= key <= "5":
+				return int(key)
+			if key in ("8", "9"):
+				return int(key) - 8 + 6
+			return None
 		if key == "6":
-			return side * 8
+			return 15
 		if "1" <= key <= "5":
-			return int(key) + side * 8
+			return int(key) + 7
 		if key in ("8", "9"):
-			return int(key) - 8 + 6 + side * 8
+			return int(key) - 8 + 13
 		return None
 	if mode == "PMS9":
 		if side == 0 and "1" <= key <= "5":

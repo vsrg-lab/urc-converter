@@ -1,8 +1,8 @@
 /**
  * Parser for .osu text.
  */
-import type { OsuBeatmap, OsuHitObject, OsuTimingPoint } from "./model.js";
 import { UrcError } from "../../error.js";
+import type { OsuBeatmap, OsuHitObject, OsuTimingPoint } from "./model.js";
 
 const METADATA_FIELDS: Record<string, "title" | "titleUnicode" | "artist" | "artistUnicode" | "creator" | "version"> = {
 	Title: "title",

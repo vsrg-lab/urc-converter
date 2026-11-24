@@ -34,7 +34,14 @@ export default defineConfig([
 			"@stylistic/arrow-parens": ["error", "as-needed"],
 			"@stylistic/space-infix-ops": "error",
 			"@stylistic/space-before-blocks": "error",
-			"@stylistic/object-curly-spacing": ["error", "always"],
+			"@stylistic/list-style": ["error", {
+				overrides: {
+					"()": "off",
+					"[]": "off",
+					"<>": "off",
+					"{}": { singleLine: { spacing: "always" } }
+				}
+			}],
 			"@stylistic/no-multiple-empty-lines": ["error", { max: 1 }],
 			"eqeqeq": ["error", "always"],
 			"import-x/order": ["error", {

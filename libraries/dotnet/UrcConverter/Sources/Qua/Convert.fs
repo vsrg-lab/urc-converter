@@ -1,5 +1,6 @@
 namespace UrcConverter.Sources.Qua
 
+[<RequireQualifiedAccess>]
 module Convert =
 
     open FsToolkit.ErrorHandling
@@ -21,128 +22,125 @@ module Convert =
         | 10 -> Some 10
         | _ -> None
 
+    let private nonEmpty (value: string option) =
+        value |> Option.filter (fun text -> text <> "")
+
+    /// Maps a Quaver chart onto a URC chart.
     let convert (qua: QuaMap) : Result<Chart, UrcError> =
         result {
-            match modeKeys qua.Mode with
-            | None ->
-                return!
-                    Error(
-                        UrcError.UnsupportedVersion(1, $"unsupported Quaver mode: {qua.Mode}")
-                    )
-            | Some keys ->
-                let specialKeys = if qua.HasScratchKey then 1 else 0
+            let! keys =
+                modeKeys qua.Mode
+                |> Result.requireSome (UrcError.unsupportedVersion 1 $"unsupported Quaver mode: {qua.Mode}")
 
-                let firstNoteTime =
-                    match qua.HitObjects with
-                    | [] -> 0
-                    | objects -> objects |> List.map _.StartTime |> List.min
+            let specialKeys = if qua.HasScratchKey then 1 else 0
 
-                let bpmPoints =
-                    qua.TimingPoints
-                    |> List.map (fun point -> point.StartTime, point.Bpm, point.Signature, 4)
+            let firstNoteTime =
+                match qua.HitObjects with
+                | [] -> 0
+                | objects -> objects |> List.map _.StartTime |> List.min
 
-                let! timing =
-                    Shared.buildTiming
-                        bpmPoints
-                        (qua.SvPoints |> List.map (fun point -> point.StartTime, point.Multiplier))
-                        firstNoteTime
-                        ".qua"
-                        (Shared.firstDownbeatAfter bpmPoints firstNoteTime)
+            let bpmPoints =
+                qua.TimingPoints
+                |> List.map (fun point -> point.StartTime, point.Bpm, point.Signature, 4)
 
-                let total = keys + specialKeys
+            let svPoints =
+                qua.SvPoints |> List.map (fun point -> point.StartTime, point.Multiplier)
 
-                let! notes =
-                    qua.HitObjects
-                    |> List.traverseResultM (fun obj ->
-                        let lane = obj.Lane - 1
+            let! timing =
+                Shared.buildTiming
+                    bpmPoints
+                    svPoints
+                    firstNoteTime
+                    ".qua"
+                    (Shared.firstDownbeatAfter bpmPoints firstNoteTime)
 
-                        if lane < 0 || lane >= total then
-                            Error(UrcError.Syntax(1, $"lane out of range: {obj.Lane}"))
-                        elif obj.EndTime <> 0 && obj.EndTime < obj.StartTime then
-                            Error(
-                                UrcError.Syntax(
-                                    1,
-                                    $"hold ends before it starts: {obj.EndTime} < {obj.StartTime}"
-                                )
-                            )
-                        elif obj.EndTime <> 0 then
-                            Ok
-                                [
-                                    {
-                                        TimestampMs = obj.StartTime - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.LS
-                                    }
-                                    {
-                                        TimestampMs = obj.EndTime - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.LE
-                                    }
-                                ]
-                        elif obj.Mine then
-                            Ok
-                                [
-                                    {
-                                        TimestampMs = obj.StartTime - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.M
-                                    }
-                                ]
-                        else
-                            Ok
-                                [
-                                    {
-                                        TimestampMs = obj.StartTime - firstNoteTime
-                                        Lane = lane
-                                        Type = NoteType.N
-                                    }
-                                ])
-                    |> Result.map List.concat
+            let total = keys + specialKeys
 
-                do! Shared.checkHoldOverlap notes
+            let! notes =
+                qua.HitObjects
+                |> List.traverseResultM (fun obj ->
+                    let lane = obj.Lane - 1
 
-                let metadata =
-                    [
-                        ("Title", qua.Title)
-                        ("Artist", qua.Artist)
-                        ("Creator", qua.Creator)
-                        ("DifficultyName", qua.DifficultyName)
-                    ]
+                    if lane < 0 || lane >= total then
+                        Error(UrcError.syntax 1 $"lane out of range: {obj.Lane}")
+                    elif obj.EndTime <> 0 && obj.EndTime < obj.StartTime then
+                        Error(UrcError.syntax 1 $"hold ends before it starts: {obj.EndTime} < {obj.StartTime}")
+                    elif obj.EndTime <> 0 && obj.EndTime = obj.StartTime then
+                        Error(UrcError.zeroLengthHold 1 $"zero-length hold on lane {lane} at {obj.StartTime}ms")
+                    elif obj.EndTime <> 0 then
+                        Ok
+                            [
+                                {
+                                    TimestampMs = obj.StartTime - firstNoteTime
+                                    Lane = lane
+                                    Type = NoteType.LS
+                                }
+                                {
+                                    TimestampMs = obj.EndTime - firstNoteTime
+                                    Lane = lane
+                                    Type = NoteType.LE
+                                }
+                            ]
+                    elif obj.Mine then
+                        Ok
+                            [
+                                {
+                                    TimestampMs = obj.StartTime - firstNoteTime
+                                    Lane = lane
+                                    Type = NoteType.M
+                                }
+                            ]
+                    else
+                        Ok
+                            [
+                                {
+                                    TimestampMs = obj.StartTime - firstNoteTime
+                                    Lane = lane
+                                    Type = NoteType.N
+                                }
+                            ])
+                |> Result.map List.concat
 
+            do! Shared.checkHoldOverlap notes
+
+            let title = nonEmpty qua.Title
+            let artist = nonEmpty qua.Artist
+            let creator = nonEmpty qua.Creator
+            let difficultyName = nonEmpty qua.DifficultyName
+
+            match title, artist, creator, difficultyName with
+            | Some title, Some artist, Some creator, Some version ->
+                return
+                    {
+                        FormatVersion = { Major = 1; Minor = 1 }
+                        Metadata =
+                            {
+                                Original = "Quaver"
+                                Title = title
+                                Artist = artist
+                                Creator = creator
+                                Version = version
+                            }
+                        Judgment = None
+                        Layout =
+                            {
+                                Keys = keys
+                                SpecialKeys = specialKeys
+                                SpecialLanes = if qua.HasScratchKey then Some [ keys ] else None
+                            }
+                        TimingPoints = timing
+                        Notes = notes
+                    }
+            | _ ->
                 let missing =
-                    metadata
-                    |> List.choose (fun (name, value) ->
-                        match value with
-                        | Some value when value <> "" -> None
-                        | _ -> Some name)
+                    [
+                        "Title", title
+                        "Artist", artist
+                        "Creator", creator
+                        "DifficultyName", difficultyName
+                    ]
+                    |> List.choose (fun (name, value) -> if Option.isNone value then Some name else None)
+                    |> String.concat ", "
 
-                let missingText = missing |> String.concat ", "
-
-                if not (List.isEmpty missing) then
-                    return! Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
-
-                match qua.Title, qua.Artist, qua.Creator, qua.DifficultyName with
-                | Some title, Some artist, Some creator, Some version ->
-                    return
-                        {
-                            FormatVersion = { Major = 1; Minor = 1 }
-                            Metadata =
-                                {
-                                    Original = "Quaver"
-                                    Title = title
-                                    Artist = artist
-                                    Creator = creator
-                                    Version = version
-                                }
-                            Judgment = None
-                            Layout =
-                                {
-                                    Keys = keys
-                                    SpecialKeys = specialKeys
-                                    SpecialLanes = if qua.HasScratchKey then Some [ keys ] else None
-                                }
-                            TimingPoints = timing
-                            Notes = notes
-                        }
-                | _ -> return! Error(UrcError.Syntax(1, $"missing metadata: {missingText}"))
+                return! Error(UrcError.syntax 1 $"missing metadata: {missing}")
         }

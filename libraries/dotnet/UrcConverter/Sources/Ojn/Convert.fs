@@ -1,9 +1,9 @@
 namespace UrcConverter.Sources.Ojn
 
+[<RequireQualifiedAccess>]
 module Convert =
 
     open System
-    open System.Collections.Generic
     open FsToolkit.ErrorHandling
     open UrcConverter
     open UrcConverter.Sources
@@ -18,15 +18,18 @@ module Convert =
     let private versions = [| "Easy"; "Normal"; "Hard" |]
 
     let private scales =
-        [| 1.0; 10.0; 100.0; 1000.0; 10000.0; 100000.0; 1000000.0; 10000000.0; 100000000.0; 1000000000.0 |]
-
-    let private typeRank =
-        function
-        | NoteType.N -> 0
-        | NoteType.LS -> 1
-        | NoteType.LE -> 2
-        | NoteType.M -> 3
-        | NoteType.F -> 4
+        [|
+            1.0
+            10.0
+            100.0
+            1000.0
+            10000.0
+            100000.0
+            1000000.0
+            10000000.0
+            100000000.0
+            1000000000.0
+        |]
 
     let private decimalOf (candidate: int64) (precision: int) : string =
         let sign = if candidate < 0L then "-" else ""
@@ -103,67 +106,42 @@ module Convert =
             MeterDirty: bool
             BpmPoints: (int * float * int * int) list
             Anchors: int list
-            Notes: ResizeArray<int * int * NoteType>
-            Holds: Dictionary<int, int>
+            Notes: (int * int * NoteType) list
+            Holds: Map<int, int>
         }
 
-    let private addNote
-        (notes: ResizeArray<int * int * NoteType>)
-        (holds: Dictionary<int, int>)
+    let private applyNote
+        (state: WalkState)
         (ms: int)
         (lane: int)
-        (kind: int)
-        : unit =
-        if kind = 3 then
-            match holds.TryGetValue lane with
-            | true, index ->
-                holds.Remove(lane) |> ignore
-                let headMs, headLane, _ = notes[index]
-
+        (kind: OjnNoteKind)
+        (offset: int)
+        : Result<WalkState, UrcError> =
+        match kind with
+        | OjnNoteKind.HoldEnd ->
+            match Map.tryFind lane state.Holds with
+            | Some headMs ->
                 if ms <= headMs then
-                    notes[index] <- (headMs, headLane, NoteType.N)
+                    Error(UrcError.zeroLengthHold offset $"zero-length hold on lane {lane} at {headMs}ms")
                 else
-                    notes.Add((ms, lane, NoteType.LE))
-            | false, _ -> ()
-        elif holds.ContainsKey lane then
-            ()
-        elif kind = 2 then
-            holds[lane] <- notes.Count
-            notes.Add((ms, lane, NoteType.LS))
-        else
-            notes.Add((ms, lane, NoteType.N))
+                    Ok
+                        { state with
+                            Holds = Map.remove lane state.Holds
+                            Notes = (ms, lane, NoteType.LE) :: (headMs, lane, NoteType.LS) :: state.Notes
+                        }
+            | None -> Ok state
+        | OjnNoteKind.HoldStart ->
+            if Map.containsKey lane state.Holds then
+                Ok state
+            else
+                Ok { state with Holds = Map.add lane ms state.Holds }
+        | OjnNoteKind.Normal ->
+            if Map.containsKey lane state.Holds then
+                Ok state
+            else
+                Ok { state with Notes = (ms, lane, NoteType.N) :: state.Notes }
 
-    let rec private walk (rest: OjnEvent list) (state: WalkState) : Result<WalkState, UrcError> =
-        match rest with
-        | [] -> Ok state
-        | event :: tail ->
-            result {
-                let! advanced = advance state event.Measure event.Offset
-                let time = advanced.Time + (MeasureMs * (event.Position - advanced.Pointer)) / advanced.Bpm
-                let stepped = { advanced with Time = time; Pointer = event.Position }
-
-                let next =
-                    if event.Channel = 0 then
-                        match fractionMeter event.Value with
-                        | Some meter when meter <> stepped.Meter ->
-                            { stepped with
-                                Fraction = event.Value
-                                Meter = meter
-                                MeterDirty = true
-                                BpmPoints = (Shared.roundMs time, canonicalBpm stepped.Bpm, fst meter, snd meter) :: stepped.BpmPoints }
-                        | _ -> { stepped with Fraction = event.Value }
-                    elif event.Channel = 1 then
-                        { stepped with
-                            BpmPoints = (Shared.roundMs time, canonicalBpm event.Value, fst stepped.Meter, snd stepped.Meter) :: stepped.BpmPoints
-                            Bpm = event.Value }
-                    else
-                        addNote stepped.Notes stepped.Holds (Shared.roundMs time) (event.Channel - 2) event.Kind
-                        stepped
-
-                return! walk tail next
-            }
-
-    and private advance (state: WalkState) (target: int) (eventOffset: int) : Result<WalkState, UrcError> =
+    let rec private advance (state: WalkState) (target: int) (eventOffset: int) : Result<WalkState, UrcError> =
         if state.Measure >= target then
             Ok state
         elif state.Fraction - state.Pointer < 0.0 then
@@ -182,16 +160,58 @@ module Convert =
                         Meter = (4, 4)
                         MeterDirty = false
                         BpmPoints = (anchor, canonicalBpm state.Bpm, 4, 4) :: state.BpmPoints
-                        Anchors = anchor :: state.Anchors }
+                        Anchors = anchor :: state.Anchors
+                    }
                 else
                     { state with
                         Time = time
                         Measure = state.Measure + 1
                         Fraction = 1.0
                         Pointer = 0.0
-                        Anchors = anchor :: state.Anchors }
+                        Anchors = anchor :: state.Anchors
+                    }
 
             advance nextState target eventOffset
+
+    let rec private walk (rest: OjnEvent list) (state: WalkState) : Result<WalkState, UrcError> =
+        match rest with
+        | [] -> Ok state
+        | event :: tail ->
+            match advance state event.Measure event.Offset with
+            | Error err -> Error err
+            | Ok advanced ->
+                let time = advanced.Time + (MeasureMs * (event.Position - advanced.Pointer)) / advanced.Bpm
+                let stepped = { advanced with Time = time; Pointer = event.Position }
+
+                let nextResult =
+                    match event.Kind with
+                    | OjnEventKind.MeasureFraction value ->
+                        match fractionMeter value with
+                        | Some meter when meter <> stepped.Meter ->
+                            Ok
+                                { stepped with
+                                    Fraction = value
+                                    Meter = meter
+                                    MeterDirty = true
+                                    BpmPoints =
+                                        (Shared.roundMs time, canonicalBpm stepped.Bpm, fst meter, snd meter)
+                                        :: stepped.BpmPoints
+                                }
+                        | _ -> Ok { stepped with Fraction = value }
+                    | OjnEventKind.BpmChange value ->
+                        Ok
+                            { stepped with
+                                BpmPoints =
+                                    (Shared.roundMs time, canonicalBpm value, fst stepped.Meter, snd stepped.Meter)
+                                    :: stepped.BpmPoints
+                                Bpm = value
+                            }
+                    | OjnEventKind.Note(lane, kind) ->
+                        applyNote stepped (Shared.roundMs time) lane kind event.Offset
+
+                match nextResult with
+                | Ok next -> walk tail next
+                | Error err -> Error err
 
     let private convertChart (file: OjnFile) (difficulty: OjnDifficulty) : Result<Chart, UrcError> =
         result {
@@ -214,32 +234,42 @@ module Convert =
                     MeterDirty = false
                     BpmPoints = [ (0, canonicalBpm file.Bpm, 4, 4) ]
                     Anchors = [ 0 ]
-                    Notes = ResizeArray()
-                    Holds = Dictionary()
+                    Notes = []
+                    Holds = Map.empty
                 }
 
             let! state = walk events initial
 
-            for KeyValue(_lane, index) in state.Holds do
-                let ms, lane, _ = state.Notes[index]
-                state.Notes[index] <- (ms, lane, NoteType.N)
+            let orphanNotes =
+                state.Holds
+                |> Map.toList
+                |> List.map (fun (lane, headMs) -> headMs, lane, NoteType.N)
+
+            let allNotes = orphanNotes @ state.Notes
 
             let firstNoteTime =
-                match state.Notes |> Seq.filter (fun (_, _, noteType) -> noteType <> NoteType.LE) |> Seq.toList with
-                | [] -> 0
-                | notes -> notes |> List.map (fun (ms, _, _) -> ms) |> List.min
+                allNotes
+                |> List.choose (fun (ms, _, noteType) -> if noteType <> NoteType.LE then Some ms else None)
+                |> function
+                    | [] -> 0
+                    | times -> List.min times
 
             let anchor =
-                state.Anchors |> List.rev |> List.tryFind (fun time -> time >= firstNoteTime)
+                state.Anchors
+                |> List.rev
+                |> List.tryFind (fun time -> time >= firstNoteTime)
 
             let! timingPoints = Shared.buildTiming (List.rev state.BpmPoints) [] firstNoteTime ".ojn" anchor
 
             let finalNotes =
-                state.Notes
-                |> Seq.toList
-                |> List.sortBy (fun (ms, lane, noteType) -> ms, lane, typeRank noteType)
+                allNotes
+                |> List.sortBy (fun (ms, lane, noteType) -> ms, lane, noteType)
                 |> List.map (fun (ms, lane, noteType) ->
-                    { TimestampMs = ms - firstNoteTime; Lane = lane; Type = noteType })
+                    {
+                        TimestampMs = ms - firstNoteTime
+                        Lane = lane
+                        Type = noteType
+                    })
 
             do! Shared.checkHoldOverlap finalNotes
 
@@ -262,5 +292,5 @@ module Convert =
         }
 
     /// Converts every difficulty of an OJN file into URC charts.
-    let convertOjn (file: OjnFile) : Result<Chart list, UrcError> =
-        file.Difficulties |> List.map (convertChart file) |> Shared.sequence
+    let convert (file: OjnFile) : Result<Chart list, UrcError> =
+        file.Difficulties |> List.traverseResultM (convertChart file)

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use crate::error::{Result, UrcError};
 use crate::model::{Chart, Layout, Metadata, Note, NoteType, Version};
+use crate::strings::ZERO_LENGTH_HOLD;
 
 use super::super::shared::{build_timing, check_hold_overlap, round_ms};
 use super::model::{OjnDifficulty, OjnFile};
@@ -97,7 +98,8 @@ fn convert_chart(file: &OjnFile, difficulty: &OjnDifficulty) -> Result<Chart> {
                 round_ms(time),
                 event.channel as u32 - 2,
                 event.kind,
-            );
+                event.offset,
+            )?;
         }
     }
     for &index in holds.values() {
@@ -165,19 +167,23 @@ fn add_note(
     ms: i64,
     lane: u32,
     kind: u8,
-) {
+    offset: u32,
+) -> Result<()> {
     if kind == 3 {
         if let Some(index) = holds.remove(&lane) {
             if ms <= notes[index].0 {
-                notes[index].2 = NoteType::N;
-            } else {
-                notes.push((ms, lane, NoteType::Le));
+                return Err(UrcError::new(
+                    ZERO_LENGTH_HOLD,
+                    offset,
+                    format!("zero-length hold on lane {lane} at {}ms", notes[index].0),
+                ));
             }
+            notes.push((ms, lane, NoteType::Le));
         }
-        return;
+        return Ok(());
     }
     if holds.contains_key(&lane) {
-        return;
+        return Ok(());
     }
     if kind == 2 {
         holds.insert(lane, notes.len());
@@ -185,6 +191,7 @@ fn add_note(
     } else {
         notes.push((ms, lane, NoteType::N));
     }
+    Ok(())
 }
 
 /// Shortest decimal that round-trips the f32 BPM, widened to f64. Candidates

@@ -1,4 +1,4 @@
-//! Canonical URC serializer (normal form defined in the M0 plan).
+//! Canonical URC serializer.
 
 use crate::model::Chart;
 use crate::strings::{

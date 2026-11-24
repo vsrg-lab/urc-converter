@@ -3,6 +3,7 @@
  */
 import { UrcError } from "../../error.js";
 import type { Chart, NoteType } from "../../model.js";
+import { ZERO_LENGTH_HOLD } from "../../strings.js";
 import { buildTiming, checkHoldOverlap, roundMs } from "../shared.js";
 import type { SmChart, SmFile, SmNote, Timing } from "./model.js";
 import { resolveLanes } from "./parse.js";
@@ -69,7 +70,10 @@ function convertChart(simfile: SmFile, chart: SmChart): Chart {
 		entries.push([rows(beat), 5, "timesig", [numerator, denominator] as [number, number]]);
 	for (const [beat, ratio] of timing.scrolls)
 		entries.push([rows(beat), 6, "scroll", ratio]);
-	const maxRow = entries.length > 0 ? Math.max(...entries.map(entry => entry[0])) : 0;
+	let maxRow = 0;
+	for (const entry of entries)
+		if (entry[0] > maxRow)
+			maxRow = entry[0];
 	for (let row = 0; row < maxRow + MEASURE_ROWS; row += MEASURE_ROWS)
 		entries.push([row, 2, "anchor", null]);
 
@@ -148,8 +152,13 @@ function convertChart(simfile: SmFile, chart: SmChart): Chart {
 	}
 
 	const urcNotes = buildUrcNotes(timing, notes, headTimes, tailTimes);
-	const noteTimes = urcNotes.filter(([, , type]) => type !== "LE").map(([time]) => time);
-	const firstNoteTime = noteTimes.length > 0 ? Math.min(...noteTimes) : 0;
+	let firstNoteTime = 0;
+	let hasNote = false;
+	for (const [time, , type] of urcNotes)
+		if (type !== "LE" && (!hasNote || time < firstNoteTime)) {
+			firstNoteTime = time;
+			hasNote = true;
+		}
 
 	const timingPoints = buildTiming(
 		bpmPoints,
@@ -208,8 +217,14 @@ function buildUrcNotes(
 		}
 		if (note.kind === "hold") {
 			const tailMs = roundMs((tailTimes.get(index) ?? 0) * 1000);
-			if (tailMs <= headMs)
-				throw new UrcError("syntax", 1, `hold on lane ${note.track} collapses to zero length`);
+			if (tailMs < headMs)
+				throw new UrcError("syntax", 1, `hold ends before it starts: ${tailMs} < ${headMs}`);
+			if (tailMs === headMs)
+				throw new UrcError(
+					ZERO_LENGTH_HOLD,
+					1,
+					`zero-length hold on lane ${note.track} at ${headMs}ms`
+				);
 			urcNotes.push([headMs, note.track, "LS"]);
 			urcNotes.push([tailMs, note.track, "LE"]);
 		} else if (note.kind === "roll") {

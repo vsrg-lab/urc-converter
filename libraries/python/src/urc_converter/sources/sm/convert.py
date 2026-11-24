@@ -4,6 +4,7 @@ from itertools import groupby
 
 from ...error import UrcError
 from ...model import Chart, Layout, Metadata, Note, NoteType, Version
+from ...strings import ZERO_LENGTH_HOLD
 from .._shared import build_timing, check_hold_overlap, round_ms
 from .model import SmChart, SmFile, SmNote, Timing
 from .parse import resolve_lanes
@@ -176,8 +177,18 @@ def _build_urc_notes(
 			urc_notes.append((head_ms, note.track, NoteType.F))
 		elif note.kind == "hold":
 			tail_ms = round_ms(tail_times[index] * 1000.0)
-			if tail_ms <= head_ms:
-				raise UrcError("syntax", 1, f"hold on lane {note.track} collapses to zero length")
+			if tail_ms < head_ms:
+				raise UrcError(
+					"syntax",
+					1,
+					f"hold ends before it starts: {tail_ms} < {head_ms}",
+				)
+			if tail_ms == head_ms:
+				raise UrcError(
+					ZERO_LENGTH_HOLD,
+					1,
+					f"zero-length hold on lane {note.track} at {head_ms}ms",
+				)
 			urc_notes.append((head_ms, note.track, NoteType.LS))
 			urc_notes.append((tail_ms, note.track, NoteType.LE))
 		elif note.kind == "roll":

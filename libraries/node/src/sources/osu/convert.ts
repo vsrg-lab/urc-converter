@@ -3,6 +3,7 @@
  */
 import { UrcError } from "../../error.js";
 import type { Chart, Note } from "../../model.js";
+import { ZERO_LENGTH_HOLD } from "../../strings.js";
 import { buildTiming, checkHoldOverlap, firstDownbeatAfter } from "../shared.js";
 import type { OsuBeatmap } from "./model.js";
 
@@ -30,9 +31,13 @@ export function convertOsu(beatmap: OsuBeatmap): Chart {
 	if (beatmap.timingPoints.some(point => point.beatLength === 0))
 		throw new UrcError("syntax", 1, "timing point with zero beat length");
 
-	const firstNoteTime = beatmap.hitObjects.length === 0
-		? 0
-		: Math.min(...beatmap.hitObjects.map(obj => obj.time));
+	let firstNoteTime = 0;
+	if (beatmap.hitObjects.length > 0) {
+		firstNoteTime = beatmap.hitObjects[0].time;
+		for (let i = 1; i < beatmap.hitObjects.length; i++)
+			if (beatmap.hitObjects[i].time < firstNoteTime)
+				firstNoteTime = beatmap.hitObjects[i].time;
+	}
 
 	const bpmPoints: Array<[number, number, number, number]> = beatmap.timingPoints
 		.filter(point => point.uninherited)
@@ -66,6 +71,13 @@ export function convertOsu(beatmap: OsuBeatmap): Chart {
 					`hold ends before it starts: ${obj.endTime} < ${obj.time}`
 				);
 
+			if (obj.endTime === obj.time)
+				throw new UrcError(
+					ZERO_LENGTH_HOLD,
+					1,
+					`zero-length hold on lane ${lane} at ${obj.time}ms`
+				);
+
 			notes.push({ timestampMs: obj.time - firstNoteTime, lane, type: "LS" });
 			notes.push({ timestampMs: obj.endTime - firstNoteTime, lane, type: "LE" });
 		} else
@@ -83,8 +95,8 @@ export function convertOsu(beatmap: OsuBeatmap): Chart {
 			rates: [...JUDGMENT_RATES]
 		};
 
-	const title = beatmap.titleUnicode ?? beatmap.title;
-	const artist = beatmap.artistUnicode ?? beatmap.artist;
+	const title = beatmap.titleUnicode || beatmap.title;
+	const artist = beatmap.artistUnicode || beatmap.artist;
 	const missing = [
 		["Title", title],
 		["Artist", artist],

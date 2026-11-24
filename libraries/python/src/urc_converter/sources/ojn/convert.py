@@ -5,6 +5,7 @@ import struct
 
 from ...error import UrcError
 from ...model import Chart, Layout, Metadata, Note, NoteType, Version
+from ...strings import ZERO_LENGTH_HOLD
 from .._shared import build_timing, check_hold_overlap, round_ms
 from .model import OjnDifficulty, OjnFile
 
@@ -63,7 +64,7 @@ def _convert_chart(file: OjnFile, difficulty: OjnDifficulty) -> Chart:
 			bpm_points.append((round_ms(time), _canonical_bpm(event.value), *meter))
 			bpm = event.value
 		else:
-			_add_note(notes, holds, round_ms(time), event.channel - 2, event.type)
+			_add_note(notes, holds, round_ms(time), event.channel - 2, event.type, event.offset)
 
 	for index in holds.values():
 		notes[index][2] = NoteType.N
@@ -101,16 +102,26 @@ def _convert_chart(file: OjnFile, difficulty: OjnDifficulty) -> Chart:
 	)
 
 
-def _add_note(notes: list[list], holds: dict[int, int], ms: int, lane: int, kind: int) -> None:
+def _add_note(
+	notes: list[list],
+	holds: dict[int, int],
+	ms: int,
+	lane: int,
+	kind: int,
+	offset: int,
+) -> None:
 	"""Append a note applying the client-emulating long-note repair."""
 	if kind == 3:
 		index = holds.pop(lane, None)
 		if index is None:
 			return
 		if ms <= notes[index][0]:
-			notes[index][2] = NoteType.N
-		else:
-			notes.append([ms, lane, NoteType.LE])
+			raise UrcError(
+				ZERO_LENGTH_HOLD,
+				offset,
+				f"zero-length hold on lane {lane} at {notes[index][0]}ms",
+			)
+		notes.append([ms, lane, NoteType.LE])
 		return
 	if lane in holds:
 		return

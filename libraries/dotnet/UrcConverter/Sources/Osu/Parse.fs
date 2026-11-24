@@ -1,239 +1,190 @@
 namespace UrcConverter.Sources.Osu
 
+[<RequireQualifiedAccess>]
 module Parse =
 
     open System
     open System.Globalization
-    open FParsec
+    open System.IO
     open FsToolkit.ErrorHandling
     open UrcConverter
     open UrcConverter.Sources
     open UrcConverter.Sources.Osu.Model
 
-    type private State = { Beatmap: Beatmap; Section: string }
+    [<RequireQualifiedAccess>]
+    type private Section =
+        | None
+        | General
+        | Metadata
+        | Difficulty
+        | TimingPoints
+        | HitObjects
+        | Other
 
-    let private pNumber: Parser<float, State> =
-        let invariant (token: string) =
-            Double.Parse(token, NumberStyles.Float, CultureInfo.InvariantCulture)
+    let private parseSection (name: string) =
+        match name.Trim() with
+        | "General" -> Section.General
+        | "Metadata" -> Section.Metadata
+        | "Difficulty" -> Section.Difficulty
+        | "TimingPoints" -> Section.TimingPoints
+        | "HitObjects" -> Section.HitObjects
+        | _ -> Section.Other
 
-        pipe2
-            (opt (pchar '-'))
-            (many1 digit .>>. opt (pchar '.' >>. many1 digit))
-            (fun sign (whole, fraction) ->
-                let magnitude =
-                    match fraction with
-                    | None -> invariant (String(Array.ofList whole))
-                    | Some digits ->
-                        invariant $"{String(Array.ofList whole)}.{String(Array.ofList digits)}"
+    let private (|Skip|SectionHeader|Content|) (line: string) =
+        if line.Length = 0 || line.StartsWith("//", StringComparison.Ordinal) then
+            Skip
+        elif line.Length >= 2 && line[0] = '[' && line[line.Length - 1] = ']' then
+            SectionHeader(line[1 .. line.Length - 2])
+        else
+            Content line
 
-                if Option.isSome sign then -magnitude else magnitude)
+    let private (|KeyValue|_|) (line: string) =
+        match line.Split(':', 2) with
+        | [| key; value |] -> Some(key.Trim(), value.Trim())
+        | _ -> None
 
-    let private pNumberW: Parser<float, State> =
-        many (pchar ' ') >>. pNumber .>> many (pchar ' ')
+    let private parseFloat (token: string) (lineNo: int) (label: string) : Result<float, UrcError> =
+        match Double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture) with
+        | true, value when Double.IsFinite value -> Ok value
+        | _ -> Error(UrcError.syntax lineNo $"invalid {label}: '{token}'")
 
-    let private lineText: Parser<string, State> =
-        manySatisfy (fun c -> c <> '\r' && c <> '\n')
+    let private parseRoundedInt (token: string) (lineNo: int) (label: string) : Result<int, UrcError> =
+        parseFloat token lineNo label |> Result.map Shared.roundMs
 
-    let private numberField
-        (label: string)
-        (value: string)
-        (update: Beatmap -> float -> Beatmap)
-        : Parser<unit, State> =
-        match Double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture) with
-        | true, number ->
-            updateUserState (fun state ->
-                { state with
-                    Beatmap = update state.Beatmap number
-                })
-        | false, _ -> fail $"invalid {label}: '{value}'"
+    let private parseGeneral (beatmap: Beatmap) (line: string) (lineNo: int) : Result<Beatmap, UrcError> =
+        match line with
+        | KeyValue("Mode", value) ->
+            parseRoundedInt value lineNo "Mode"
+            |> Result.map (fun mode -> { beatmap with Mode = mode })
+        | _ -> Ok beatmap
 
-    let private pKeyValue: Parser<string * string, State> =
-        pipe2
-            (many1Satisfy (fun c -> c <> ':' && c <> '\r' && c <> '\n') .>> pchar ':')
-            lineText
-            (fun key value -> key.Trim(), value.Trim())
+    let private parseMetadata (beatmap: Beatmap) (line: string) : Result<Beatmap, UrcError> =
+        match line with
+        | KeyValue("Title", value) -> Ok { beatmap with Title = Some value }
+        | KeyValue("TitleUnicode", value) -> Ok { beatmap with TitleUnicode = Some value }
+        | KeyValue("Artist", value) -> Ok { beatmap with Artist = Some value }
+        | KeyValue("ArtistUnicode", value) -> Ok { beatmap with ArtistUnicode = Some value }
+        | KeyValue("Creator", value) -> Ok { beatmap with Creator = Some value }
+        | KeyValue("Version", value) -> Ok { beatmap with Version = Some value }
+        | _ -> Ok beatmap
 
-    let private applyKeyValue ((key, value): string * string) : Parser<unit, State> =
-        match key with
-        | "Mode" ->
-            numberField "Mode" value (fun beatmap number ->
-                { beatmap with Mode = Shared.roundMs number })
-        | "CircleSize" ->
-            numberField "CircleSize" value (fun beatmap number ->
-                { beatmap with
-                    CircleSize = Some number
-                })
-        | "OverallDifficulty" ->
-            numberField "OverallDifficulty" value (fun beatmap number ->
-                { beatmap with
-                    OverallDifficulty = Some number
-                })
-        | "Title"
-        | "TitleUnicode"
-        | "Artist"
-        | "ArtistUnicode"
-        | "Creator"
-        | "Version" ->
-            updateUserState (fun state ->
-                let beatmap = state.Beatmap
+    let private parseDifficulty (beatmap: Beatmap) (line: string) (lineNo: int) : Result<Beatmap, UrcError> =
+        match line with
+        | KeyValue("CircleSize", value) ->
+            parseFloat value lineNo "CircleSize"
+            |> Result.map (fun cs -> { beatmap with CircleSize = Some cs })
+        | KeyValue("OverallDifficulty", value) ->
+            parseFloat value lineNo "OverallDifficulty"
+            |> Result.map (fun od -> { beatmap with OverallDifficulty = Some od })
+        | _ -> Ok beatmap
 
-                let beatmap =
-                    match key with
-                    | "Title" -> { beatmap with Title = Some value }
-                    | "TitleUnicode" ->
-                        { beatmap with
-                            TitleUnicode = Some value
-                        }
-                    | "Artist" -> { beatmap with Artist = Some value }
-                    | "ArtistUnicode" ->
-                        { beatmap with
-                            ArtistUnicode = Some value
-                        }
-                    | "Creator" -> { beatmap with Creator = Some value }
-                    | _ -> { beatmap with Version = Some value }
+    let private parseTimingPoint (line: string) (lineNo: int) : Result<TimingPoint, UrcError> =
+        let fields = line.Split(',') |> Array.map _.Trim()
 
-                { state with Beatmap = beatmap })
-        | _ -> preturn ()
+        if fields.Length < 2 then
+            Error(UrcError.syntax lineNo $"timing point needs at least 2 fields: '{line}'")
+        else
+            result {
+                let! time = parseRoundedInt fields[0] lineNo "timing time"
+                let! beatLength = parseFloat fields[1] lineNo "beat length"
 
-    let private pTimingBody: Parser<unit, State> =
-        sepBy pNumberW (pchar ',')
-        >>= fun fields ->
-            match fields with
-            | [] -> preturn ()
-            | [ _ ] -> fail "timing point needs at least 2 fields"
-            | time :: beatLength :: _ ->
-                let meter = List.tryItem 2 fields |> Option.map Shared.roundMs |> Option.defaultValue 4
-
-                let uninherited =
-                    List.tryItem 6 fields
-                    |> Option.map (fun value -> Shared.roundMs value <> 0)
-                    |> Option.defaultValue true
-
-                updateUserState (fun state ->
-                    let point =
-                        {
-                            Time = Shared.roundMs time
-                            BeatLength = beatLength
-                            Meter = meter
-                            Uninherited = uninherited
-                        }
-
-                    { state with
-                        Beatmap =
-                            { state.Beatmap with
-                                TimingPoints = point :: state.Beatmap.TimingPoints
-                            }
-                    })
-
-    let private pHitObjectBody: Parser<unit, State> =
-        pipe4
-            (pNumberW .>> pchar ',')
-            (pNumberW .>> pchar ',')
-            (pNumberW .>> pchar ',')
-            pNumberW
-            (fun x _ time typeValue ->
-                Shared.roundMs x, Shared.roundMs time, Shared.roundMs typeValue)
-        >>= fun (x, time, typeBits) ->
-            let isHold = typeBits &&& 128 <> 0
-
-            if not isHold && typeBits &&& 1 = 0 then
-                fail $"unsupported hit object type: {typeBits}"
-            else
-                let endTimeParser =
-                    if isHold then
-                        (pchar ',' >>. pNumberW >>. pchar ',' >>. pNumberW)
-                        |>> fun endValue -> Some(Shared.roundMs endValue)
+                let! meter =
+                    if fields.Length > 2 && fields[2] <> "" then
+                        parseRoundedInt fields[2] lineNo "meter"
                     else
-                        preturn None
+                        Ok 4
 
-                endTimeParser
-                >>= fun endValue ->
-                    updateUserState (fun state ->
-                        let hitObject =
-                            {
-                                X = x
-                                Time = time
-                                IsHold = isHold
-                                EndTime = endValue
-                            }
+                let! uninherited =
+                    if fields.Length > 6 && fields[6] <> "" then
+                        parseRoundedInt fields[6] lineNo "uninherited" |> Result.map (fun v -> v <> 0)
+                    else
+                        Ok true
 
-                        { state with
-                            Beatmap =
-                                { state.Beatmap with
-                                    HitObjects = hitObject :: state.Beatmap.HitObjects
-                                }
-                        })
-
-    let private pSectionHeader: Parser<unit, State> =
-        pchar '[' >>. manySatisfy (fun c -> c <> ']') .>> pchar ']'
-        >>= fun name -> updateUserState (fun state -> { state with Section = name.Trim() })
-
-    let private pLine: Parser<unit, State> =
-        getUserState
-        >>= fun state ->
-            let body =
-                match state.Section with
-                | "General"
-                | "Metadata"
-                | "Difficulty" ->
-                    // A line without a colon is skipped, matching the original
-                    // parser; a bad value in a known field still fails because
-                    // `attempt` only wraps the key-value shape.
-                    (attempt pKeyValue >>= applyKeyValue) <|> preturn ()
-                | "TimingPoints" -> pTimingBody
-                | "HitObjects" -> pHitObjectBody
-                | _ -> preturn ()
-
-            many (pchar ' ')
-            >>. choice [ attempt pSectionHeader; attempt (pstring "//") |>> ignore; body ]
-            .>> (lineText |>> ignore)
-            .>> newline
-
-    let private pOsuFile: Parser<Beatmap, State> =
-        many pLine .>> eof >>. getUserState
-        |>> fun state ->
-            let beatmap = state.Beatmap
-
-            { beatmap with
-                TimingPoints = List.rev beatmap.TimingPoints
-                HitObjects = List.rev beatmap.HitObjects
-            }
-
-    let parse (text: string) : Result<Beatmap, UrcError> =
-        let stripped =
-            if text.StartsWith("\uFEFF", StringComparison.Ordinal) then
-                text[1..]
-            else
-                text
-
-        let normalized =
-            if stripped.EndsWith("\n") then
-                stripped
-            else
-                stripped + "\n"
-
-        let initial =
-            {
-                Beatmap =
+                return
                     {
-                        Mode = 3
-                        Title = None
-                        TitleUnicode = None
-                        Artist = None
-                        ArtistUnicode = None
-                        Creator = None
-                        Version = None
-                        CircleSize = None
-                        OverallDifficulty = None
-                        TimingPoints = []
-                        HitObjects = []
+                        Time = time
+                        BeatLength = beatLength
+                        Meter = meter
+                        Uninherited = uninherited
                     }
-                Section = ""
             }
 
-        match runParserOnString pOsuFile initial "" normalized with
-        | Success(beatmap, _, _) -> Result.Ok beatmap
-        | Failure(_, parseError, _) ->
-            Result.Error(
-                UrcError.Syntax(int parseError.Position.Line, $"invalid .osu: {parseError}")
-            )
+    let private parseHitObject (line: string) (lineNo: int) : Result<HitObject, UrcError> =
+        let fields = line.Split(',') |> Array.map _.Trim()
+
+        if fields.Length < 5 then
+            Error(UrcError.syntax lineNo $"hit object needs at least 5 fields: '{line}'")
+        else
+            result {
+                let! x = parseRoundedInt fields[0] lineNo "hit object x"
+                let! time = parseRoundedInt fields[2] lineNo "hit object time"
+                let! typeBits = parseRoundedInt fields[3] lineNo "hit object type"
+
+                let isHold = typeBits &&& 128 <> 0
+
+                if not isHold && typeBits &&& 1 = 0 then
+                    return! Error(UrcError.syntax lineNo $"unsupported hit object type: {typeBits}")
+
+                let! kind =
+                    if isHold then
+                        if fields.Length < 6 then
+                            Error(UrcError.syntax lineNo $"hold note needs an end time: '{line}'")
+                        else
+                            let endParts = fields[5].Split(':', 2)
+                            let endToken = endParts[0].Trim()
+                            parseRoundedInt endToken lineNo "hold end time" |> Result.map HitObjectKind.Hold
+                    else
+                        Ok HitObjectKind.Tap
+
+                return
+                    {
+                        X = x
+                        Time = time
+                        Kind = kind
+                    }
+            }
+
+    /// Parses .osu text into its source model.
+    let parse (text: string) : Result<Beatmap, UrcError> =
+        let stripped = text.TrimStart('\uFEFF')
+        use reader = new StringReader(stripped)
+
+        let rec loop (lineNo: int) (section: Section) (beatmap: Beatmap) : Result<Beatmap, UrcError> =
+            let raw = reader.ReadLine()
+
+            if isNull raw then
+                Ok
+                    { beatmap with
+                        TimingPoints = List.rev beatmap.TimingPoints
+                        HitObjects = List.rev beatmap.HitObjects
+                    }
+            else
+                match raw.Trim() with
+                | Skip -> loop (lineNo + 1) section beatmap
+                | SectionHeader name -> loop (lineNo + 1) (parseSection name) beatmap
+                | Content line ->
+                    let next =
+                        match section with
+                        | Section.General -> parseGeneral beatmap line lineNo
+                        | Section.Metadata -> parseMetadata beatmap line
+                        | Section.Difficulty -> parseDifficulty beatmap line lineNo
+                        | Section.TimingPoints ->
+                            parseTimingPoint line lineNo
+                            |> Result.map (fun point ->
+                                { beatmap with
+                                    TimingPoints = point :: beatmap.TimingPoints
+                                })
+                        | Section.HitObjects ->
+                            parseHitObject line lineNo
+                            |> Result.map (fun hit ->
+                                { beatmap with
+                                    HitObjects = hit :: beatmap.HitObjects
+                                })
+                        | Section.None
+                        | Section.Other -> Ok beatmap
+
+                    match next with
+                    | Ok updated -> loop (lineNo + 1) section updated
+                    | Error err -> Error err
+
+        loop 1 Section.None Beatmap.Empty

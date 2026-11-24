@@ -4,6 +4,7 @@ import math
 
 from ...error import UrcError
 from ...model import Chart, Judgment, Layout, Metadata, Note, NoteType, Version
+from ...strings import ZERO_LENGTH_HOLD
 from .._shared import build_timing, check_hold_overlap, first_downbeat_after
 from .model import OsuBeatmap
 
@@ -56,6 +57,12 @@ def convert_osu(beatmap: OsuBeatmap) -> Chart:
 			if obj.end_time < obj.time:
 				raise UrcError(
 					"syntax", 1, f"hold ends before it starts: {obj.end_time} < {obj.time}"
+				)
+			if obj.end_time == obj.time:
+				raise UrcError(
+					ZERO_LENGTH_HOLD,
+					1,
+					f"zero-length hold on lane {lane} at {obj.time}ms",
 				)
 			notes.append(Note(timestamp_ms=obj.time - first_note_time, lane=lane, type=NoteType.LS))
 			notes.append(
