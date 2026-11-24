@@ -14,7 +14,7 @@ class QuaTimingPoint:
 
 @dataclass
 class QuaSvPoint:
-	"""One ScrollSpeedFactors entry."""
+	"""One SliderVelocities entry."""
 
 	start_time: int
 	multiplier: float
@@ -36,6 +36,8 @@ class QuaMap:
 
 	mode: int = 1
 	has_scratch_key: bool = False
+	bpm_does_not_affect_sv: bool = False
+	initial_scroll_velocity: float = 0.0
 	title: str | None = None
 	artist: str | None = None
 	creator: str | None = None

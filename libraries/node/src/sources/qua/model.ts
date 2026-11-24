@@ -9,7 +9,7 @@ export interface QuaTimingPoint {
 	signature: number;
 }
 
-/** One ScrollSpeedFactors entry. */
+/** One SliderVelocities entry. */
 export interface QuaSvPoint {
 	startTime: number;
 	multiplier: number;
@@ -27,6 +27,8 @@ export interface QuaHitObject {
 export interface QuaMap {
 	mode: number;
 	hasScratchKey: boolean;
+	bpmDoesNotAffectSv: boolean;
+	initialScrollVelocity: number;
 	title: string | null;
 	artist: string | null;
 	creator: string | null;

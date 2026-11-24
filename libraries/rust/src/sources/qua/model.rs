@@ -1,6 +1,6 @@
-//! Source model of a .qua chart.
+//! Source model of a `.qua` chart.
 
-/// One TimingPoints entry.
+/// One `TimingPoints` entry.
 #[derive(Debug, Clone)]
 pub struct QuaTimingPoint {
     pub start_time: i64,
@@ -8,14 +8,14 @@ pub struct QuaTimingPoint {
     pub signature: u64,
 }
 
-/// One ScrollSpeedFactors entry.
+/// One `SliderVelocities` entry.
 #[derive(Debug, Clone)]
 pub struct QuaSvPoint {
     pub start_time: i64,
     pub multiplier: f64,
 }
 
-/// One HitObjects entry.
+/// One `HitObjects` entry.
 #[derive(Debug, Clone)]
 pub struct QuaHitObject {
     pub start_time: i64,
@@ -24,11 +24,13 @@ pub struct QuaHitObject {
     pub mine: bool,
 }
 
-/// Source model of a .qua chart.
+/// Source model of a `.qua` chart.
 #[derive(Debug, Clone, Default)]
 pub struct QuaMap {
     pub mode: i64,
     pub has_scratch_key: bool,
+    pub bpm_does_not_affect_sv: bool,
+    pub initial_scroll_velocity: f64,
     pub title: Option<String>,
     pub artist: Option<String>,
     pub creator: Option<String>,

@@ -23,6 +23,8 @@ module Model =
         {
             Mode: int
             HasScratchKey: bool
+            BpmDoesNotAffectSv: bool
+            InitialScrollVelocity: float
             Title: string option
             Artist: string option
             Creator: string option
