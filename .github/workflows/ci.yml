@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python (library & CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Lint and build Python library
+        run: |
+          uv sync --project libraries/python --frozen
+          uv run --project libraries/python ruff check libraries/python/src
+          uv build libraries/python
+
+      - name: Lint Python CLI
+        run: |
+          uv sync --project apps/cli --frozen
+          uv run --project apps/cli ruff check apps/cli/src
+
+  node:
+    name: TypeScript / Node
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: libraries/node/pnpm-lock.yaml
+
+      - name: Install, build, and lint
+        run: |
+          pnpm --dir libraries/node install --frozen-lockfile
+          pnpm --dir libraries/node build
+          pnpm --dir libraries/node lint
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Clippy and package check
+        run: |
+          cargo clippy --manifest-path libraries/rust/Cargo.toml --locked -- -D warnings
+          cargo package --manifest-path libraries/rust/Cargo.toml --locked --list
+
+  dotnet-lib:
+    name: .NET / F# library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build and pack F# library
+        run: |
+          dotnet build libraries/dotnet/UrcConverter/UrcConverter.fsproj -c Release -warnaserror
+          dotnet pack libraries/dotnet/UrcConverter/UrcConverter.fsproj -c Release --no-build -o artifacts
+
+  dotnet-gui:
+    name: .NET / WPF GUI
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build full solution
+        run: dotnet build UrcConverter.slnx -c Release -warnaserror
