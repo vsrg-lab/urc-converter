@@ -57,7 +57,7 @@ fn convert_chart(file: &OjnFile, difficulty: &OjnDifficulty) -> Result<Chart> {
     let mut holds: HashMap<u32, usize> = HashMap::new();
 
     for event in &events {
-        while event.measure > measure {
+        if event.measure > measure {
             if fraction - pointer < 0.0 {
                 return Err(UrcError::new(
                     "syntax",
@@ -75,6 +75,12 @@ fn convert_chart(file: &OjnFile, difficulty: &OjnDifficulty) -> Result<Chart> {
             measure += 1;
             fraction = 1.0;
             pointer = 0.0;
+            let gap = event.measure - measure;
+            if gap > 0 {
+                time += (MEASURE_MS * f64::from(gap)) / bpm;
+                measure = event.measure;
+                anchors.push(round_ms(time));
+            }
         }
         time += (MEASURE_MS * (event.position - pointer)) / bpm;
         pointer = event.position;

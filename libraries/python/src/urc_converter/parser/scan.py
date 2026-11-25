@@ -1,5 +1,6 @@
 """Scan orchestration and the public parse entry point."""
 
+import io
 import re
 
 from ..error import UrcError
@@ -19,32 +20,35 @@ def parse(text: str) -> Chart:
 		text = text[1:]
 
 	state = ParseState()
-	lines = text.splitlines()
-	_scan(lines, state)
+	end_line = _scan(text, state)
 
-	return build(state, len(lines) + 1)
+	return build(state, end_line)
 
 
-def _scan(lines: list[str], state: ParseState) -> None:
+def _scan(text: str, state: ParseState) -> int:
 	current = SECTION_URC
-	for offset, raw in enumerate(lines):
+	line_count = 0
+	for offset, raw in enumerate(io.StringIO(text)):
 		line_no = offset + 1
-		text = raw.strip()
+		line_count = line_no
+		line = raw.strip()
 
 		if offset == 0:
-			_header(text, line_no, state)
-		elif text == "" or text.startswith("#"):
+			_header(line, line_no, state)
+		elif line == "" or line.startswith("#"):
 			continue
-		elif text.startswith("@"):
+		elif line.startswith("@"):
 			finalize_section(state, current, line_no)
-			current = _section(text, line_no, state)
+			current = _section(line, line_no, state)
 		else:
 			handler = field_handler(current)
 			if handler is None:
 				raise UrcError(SYNTAX, line_no, "unexpected content after @URC header")
-			handler(state, text, line_no)
+			handler(state, line, line_no)
 
-	finalize_section(state, current, len(lines) + 1)
+	end_line = line_count + 1
+	finalize_section(state, current, end_line)
+	return end_line
 
 
 def _header(text: str, line_no: int, state: ParseState) -> None:

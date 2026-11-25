@@ -40,8 +40,6 @@ module Convert =
             Multiplier: float
             WarpDest: int64 option
             PrevRow: int64 option
-            HeadTimes: Map<int, float>
-            TailTimes: Map<int, float>
             BpmPoints: (int * float * int * int) list
             SvPoints: (int * float) list
             Anchors: int list
@@ -89,25 +87,37 @@ module Convert =
                         yield { Row = rowsOf beat; Priority = 6; Kind = ScrollEvent ratio }
                 ]
 
-            let maxRow = entries |> List.fold (fun acc entry -> max acc entry.Row) 0L
-            let anchorLimit = maxRow + MeasureRows
-
             let anchorEntries =
-                [
-                    for row in 0L .. MeasureRows .. anchorLimit - 1L ->
-                        { Row = row; Priority = 2; Kind = AnchorEvent }
-                ]
+                match notes with
+                | [] -> [ { Row = 0L; Priority = 2; Kind = AnchorEvent } ]
+                | _ ->
+                    let firstNoteRow = notes |> List.map (fun note -> int64 note.Row) |> List.min
+                    let floorMeasure = (max firstNoteRow 0L / MeasureRows) * MeasureRows
+
+                    if firstNoteRow > floorMeasure then
+                        [
+                            { Row = floorMeasure; Priority = 2; Kind = AnchorEvent }
+                            { Row = floorMeasure + MeasureRows; Priority = 2; Kind = AnchorEvent }
+                        ]
+                    else
+                        [ { Row = floorMeasure; Priority = 2; Kind = AnchorEvent } ]
+
+            let baseEntries = entries @ anchorEntries
+            let maxRow = baseEntries |> List.fold (fun acc entry -> max acc entry.Row) 0L
 
             let warpEndEntries =
                 [
                     for _, dest in intervals do
-                        if dest <= anchorLimit then
+                        if dest <= maxRow then
                             yield { Row = dest; Priority = 0; Kind = WarpEndEvent }
                 ]
 
             let entries =
-                entries @ anchorEntries @ warpEndEntries
+                baseEntries @ warpEndEntries
                 |> List.sortBy (fun entry -> entry.Row, entry.Priority)
+
+            let headTimes = Array.zeroCreate<float> notes.Length
+            let tailTimes = Array.zeroCreate<float> notes.Length
 
             let initial =
                 {
@@ -117,8 +127,6 @@ module Convert =
                     Multiplier = 1.0
                     WarpDest = None
                     PrevRow = None
-                    HeadTimes = Map.empty
-                    TailTimes = Map.empty
                     BpmPoints = []
                     SvPoints = []
                     Anchors = []
@@ -153,9 +161,11 @@ module Convert =
                             | WarpEndEvent -> s
                             | DelayEvent seconds -> { s with Seconds = s.Seconds + seconds }
                             | NoteEvent index ->
-                                { s with HeadTimes = Map.add index s.Seconds s.HeadTimes }
+                                headTimes[index] <- s.Seconds
+                                s
                             | TailEvent index ->
-                                { s with TailTimes = Map.add index s.Seconds s.TailTimes }
+                                tailTimes[index] <- s.Seconds
+                                s
                             | AnchorEvent ->
                                 { s with Anchors = Shared.roundMs (s.Seconds * 1000.0) :: s.Anchors }
                             | StopEvent seconds -> { s with Seconds = s.Seconds + seconds }
@@ -186,7 +196,7 @@ module Convert =
 
             let walked = entries |> List.groupBy _.Row |> List.fold walk initial
 
-            let! urcNotes = buildUrcNotes timing notes walked.HeadTimes walked.TailTimes
+            let! urcNotes = buildUrcNotes timing notes headTimes tailTimes
 
             let firstNoteTime =
                 urcNotes

@@ -140,6 +140,8 @@ def _resolve_timing(
 	current_bpm: float | None = None
 	current_meter = 4
 	current_sv = 1.0
+	last_bpm: tuple[float, int] | None = None
+	last_sv = 1.0
 
 	for time in all_times:
 		tp = tp_by_time.get(time)
@@ -155,7 +157,12 @@ def _resolve_timing(
 		if current_bpm is None:
 			continue
 
-		bpm_points.append((time, current_bpm, current_meter, 4))
-		sv_points.append((time, current_sv))
+		bpm_state = (current_bpm, current_meter)
+		if bpm_state != last_bpm:
+			bpm_points.append((time, current_bpm, current_meter, 4))
+			last_bpm = bpm_state
+		if current_sv != last_sv:
+			sv_points.append((time, current_sv))
+			last_sv = current_sv
 
 	return bpm_points, sv_points, anchor_points

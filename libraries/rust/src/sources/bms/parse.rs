@@ -291,39 +291,14 @@ fn is_id_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
 }
 
-fn gcd(mut a: usize, mut b: usize) -> usize {
-    while b != 0 {
-        let t = b;
-        b = a % b;
-        a = t;
+fn is_relevant_channel(channel: &str) -> bool {
+    if matches!(channel, "03" | "08" | "09" | "SC") {
+        return true;
     }
-    a
-}
-
-fn overlay(existing: Vec<String>, incoming: Vec<String>) -> Vec<String> {
-    if existing.is_empty() {
-        return incoming;
-    }
-    if incoming.is_empty() {
-        return existing;
-    }
-    let len_a = existing.len();
-    let len_b = incoming.len();
-    let total = len_a / gcd(len_a, len_b) * len_b;
-    let step_a = total / len_a;
-    let step_b = total / len_b;
-    let mut merged = vec!["00".to_string(); total];
-    for (idx, obj) in existing.into_iter().enumerate() {
-        if obj != "00" {
-            merged[idx * step_a] = obj;
-        }
-    }
-    for (idx, obj) in incoming.into_iter().enumerate() {
-        if obj != "00" {
-            merged[idx * step_b] = obj;
-        }
-    }
-    merged
+    let bytes = channel.as_bytes();
+    bytes.len() == 2
+        && matches!(bytes[0], b'1' | b'2' | b'5' | b'6' | b'D' | b'E')
+        && (b'1'..=b'9').contains(&bytes[1])
 }
 
 fn add_message(
@@ -353,28 +328,29 @@ fn add_message(
             format!("malformed object list: \"{payload}\""),
         ));
     }
-    if payload.is_empty() {
+    if payload.is_empty() || !is_relevant_channel(channel) {
         return Ok(());
     }
 
     let mut ids = Vec::with_capacity(payload.len() / 2);
     let bytes = payload.as_bytes();
+    let uppercase = channel == "03" || chart.base == 36;
     for i in (0..bytes.len()).step_by(2) {
         let token = std::str::from_utf8(&bytes[i..i + 2]).unwrap();
-        let id = if channel == "03" {
+        ids.push(if uppercase {
             token.to_ascii_uppercase()
         } else {
-            norm_id(token, chart.base)
-        };
-        ids.push(id);
+            token.to_string()
+        });
     }
 
-    let measure_map = chart.measures.entry(measure).or_default();
-    if let Some(existing) = measure_map.remove(channel) {
-        measure_map.insert(channel.to_string(), overlay(existing, ids));
-    } else {
-        measure_map.insert(channel.to_string(), ids);
-    }
+    chart
+        .measures
+        .entry(measure)
+        .or_default()
+        .entry(channel.to_string())
+        .or_default()
+        .push(ids);
 
     Ok(())
 }

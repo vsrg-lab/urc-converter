@@ -145,37 +145,45 @@ module Convert =
             else
                 Ok { state with Notes = (ms, lane, NoteType.N) :: state.Notes }
 
-    let rec private advance (state: WalkState) (target: int) (eventOffset: int) : Result<WalkState, UrcError> =
+    let private advance (state: WalkState) (target: int) (eventOffset: int) : Result<WalkState, UrcError> =
         if state.Measure >= target then
             Ok state
         elif state.Fraction - state.Pointer < 0.0 then
             Error(UrcError.syntax eventOffset "measure fraction cuts before the current position")
         else
-            let time = state.Time + (MeasureMs * (state.Fraction - state.Pointer)) / state.Bpm
-            let anchor = Shared.roundMs time
+            let firstTime = state.Time + (MeasureMs * (state.Fraction - state.Pointer)) / state.Bpm
+            let firstAnchor = Shared.roundMs firstTime
+            let nextMeasure = state.Measure + 1
+            let gap = target - nextMeasure
 
-            let nextState =
-                if state.MeterDirty then
+            let finalTime, finalMeasure, anchors =
+                if gap > 0 then
+                    let jumped = firstTime + (MeasureMs * float gap) / state.Bpm
+                    jumped, target, Shared.roundMs jumped :: firstAnchor :: state.Anchors
+                else
+                    firstTime, nextMeasure, firstAnchor :: state.Anchors
+
+            if state.MeterDirty then
+                Ok
                     { state with
-                        Time = time
-                        Measure = state.Measure + 1
+                        Time = finalTime
+                        Measure = finalMeasure
                         Fraction = 1.0
                         Pointer = 0.0
                         Meter = (4, 4)
                         MeterDirty = false
-                        BpmPoints = (anchor, canonicalBpm state.Bpm, 4, 4) :: state.BpmPoints
-                        Anchors = anchor :: state.Anchors
+                        BpmPoints = (firstAnchor, canonicalBpm state.Bpm, 4, 4) :: state.BpmPoints
+                        Anchors = anchors
                     }
-                else
+            else
+                Ok
                     { state with
-                        Time = time
-                        Measure = state.Measure + 1
+                        Time = finalTime
+                        Measure = finalMeasure
                         Fraction = 1.0
                         Pointer = 0.0
-                        Anchors = anchor :: state.Anchors
+                        Anchors = anchors
                     }
-
-            advance nextState target eventOffset
 
     let rec private walk (rest: OjnEvent list) (state: WalkState) : Result<WalkState, UrcError> =
         match rest with

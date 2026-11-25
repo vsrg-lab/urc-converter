@@ -10,27 +10,27 @@ export function tokenize(text: string): string[][] {
 	const values: string[][] = [];
 	let params: string[] = [];
 	let current = "";
-	let line = "";
+	let lineHasVisible = false;
 	let reading = false;
 
 	const endParam = (): void => {
 		params.push(current);
 		current = "";
-		line = "";
+		lineHasVisible = false;
 	};
 
 	let i = 0;
 	const n = text.length;
 	while (i < n) {
-		if (i + 1 < n && text[i] === "/" && text[i + 1] === "/") {
+		const ch = text[i];
+		if (ch === "/" && i + 1 < n && text[i + 1] === "/") {
 			while (i < n && text[i] !== "\n" && text[i] !== "\r")
 				i++;
 			continue;
 		}
-		if (reading && text[i] === "#") {
-			if (line.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "") !== "") {
+		if (reading && ch === "#") {
+			if (lineHasVisible) {
 				current += "#";
-				line += "#";
 				i++;
 				continue;
 			}
@@ -38,46 +38,56 @@ export function tokenize(text: string): string[][] {
 			values.push(params);
 			params = [];
 			current = "";
-			line = "";
+			lineHasVisible = false;
 			reading = false;
 			continue;
 		}
 		if (!reading) {
-			if (text[i] === "#") {
+			if (ch === "#") {
 				reading = true;
-				line = "";
-			} else if (text[i] !== "\\") {
-				i++;
-				continue;
-			} else if (i + 1 < n) {
+				lineHasVisible = false;
+			} else if (ch === "\\" && i + 1 < n) {
 				i += 2;
 				continue;
 			}
 			i++;
 			continue;
 		}
-		if (text[i] === ":")
+		if (ch === ":") {
 			endParam();
-		else if (text[i] === ";") {
+			i++;
+		} else if (ch === ";") {
 			endParam();
 			values.push(params);
 			params = [];
 			current = "";
-			line = "";
 			reading = false;
-		} else if (text[i] === "\\") {
+			i++;
+		} else if (ch === "\\") {
 			i++;
 			if (i < n) {
-				current += text[i];
-				line += text[i];
+				const escaped = text[i];
+				current += escaped;
+				if (escaped === "\r" || escaped === "\n")
+					lineHasVisible = false;
+				else if (escaped !== " " && escaped !== "\t")
+					lineHasVisible = true;
+				i++;
 			}
 		} else {
-			current += text[i];
-			line += text[i];
+			const start = i;
+			while (i < n) {
+				const c = text[i];
+				if (c === "#" || c === ":" || c === ";" || c === "\\" || (c === "/" && i + 1 < n && text[i + 1] === "/"))
+					break;
+				if (c === "\r" || c === "\n")
+					lineHasVisible = false;
+				else if (c !== " " && c !== "\t")
+					lineHasVisible = true;
+				i++;
+			}
+			current += text.slice(start, i);
 		}
-		if (i < n && (text[i] === "\r" || text[i] === "\n"))
-			line = "";
-		i++;
 	}
 
 	if (reading) {

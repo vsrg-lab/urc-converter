@@ -3,6 +3,7 @@ namespace UrcConverter.Sources.Qua
 [<RequireQualifiedAccess>]
 module Convert =
 
+    open System.Collections.Generic
     open FsToolkit.ErrorHandling
     open UrcConverter
     open UrcConverter.Sources
@@ -29,39 +30,43 @@ module Convert =
         match hitObjects with
         | [] -> abs nonzeroTps.Head.Bpm
         | _ ->
-            let initialLastTime =
+            let mutable lastTime =
                 hitObjects
                 |> List.map (fun obj -> if not obj.Mine && obj.EndTime > 0 then obj.EndTime else obj.StartTime)
                 |> List.max
 
-            let addDuration (acc: (float * int) list) (bpm: float) (duration: int) =
-                if List.exists (fun (b, _) -> b = bpm) acc then
-                    acc |> List.map (fun (b, d) -> if b = bpm then b, d + duration else b, d)
-                else
-                    acc @ [ bpm, duration ]
+            let durations = Dictionary<float, int>()
+            let order = ResizeArray<float>()
+            let tps = List.toArray nonzeroTps
 
-            let indexedRev = nonzeroTps |> List.indexed |> List.rev
+            for index = tps.Length - 1 downto 0 do
+                let point = tps[index]
 
-            let durations, _ =
-                indexedRev
-                |> List.fold
-                    (fun (acc, lastTime) (index, point) ->
-                        if point.StartTime > lastTime then
-                            acc, lastTime
-                        else
-                            let duration = lastTime - (if index = 0 then 0 else point.StartTime)
-                            addDuration acc (abs point.Bpm) duration, point.StartTime)
-                    ([], initialLastTime)
+                if point.StartTime <= lastTime then
+                    let duration = lastTime - (if index = 0 then 0 else point.StartTime)
+                    lastTime <- point.StartTime
+                    let bpm = abs point.Bpm
 
-            match durations with
-            | [] -> abs nonzeroTps.Head.Bpm
-            | entries ->
-                entries
-                |> List.fold
-                    (fun (bestBpm, bestDur) (bpm, dur) ->
-                        if dur > bestDur then bpm, dur else bestBpm, bestDur)
-                    (abs nonzeroTps.Head.Bpm, -1)
-                |> fst
+                    match durations.TryGetValue(bpm) with
+                    | true, existing -> durations[bpm] <- existing + duration
+                    | false, _ ->
+                        durations[bpm] <- duration
+                        order.Add(bpm)
+
+            if order.Count = 0 then
+                abs nonzeroTps.Head.Bpm
+            else
+                let mutable bestBpm = abs nonzeroTps.Head.Bpm
+                let mutable bestDur = -1
+
+                for bpm in order do
+                    let dur = durations[bpm]
+
+                    if dur > bestDur then
+                        bestDur <- dur
+                        bestBpm <- bpm
+
+                bestBpm
 
     let private resolveTiming
         (qua: QuaMap)
@@ -114,7 +119,7 @@ module Convert =
                     |> List.distinct
                     |> List.sort
 
-                let initBpms, initSvs =
+                let initBpms, initSvs, initLastBpm, initLastSv =
                     match allTimes with
                     | firstTime :: _ when qua.BpmDoesNotAffectSv && firstTime > firstNoteTime ->
                         let rawMult =
@@ -126,15 +131,18 @@ module Convert =
                         let initMult = if rawMult = 0.0 then 0.0 else rawMult
 
                         if initMult <> 1.0 then
-                            [ firstNoteTime, initEffBpm, initBeats, 4 ], [ firstNoteTime, initMult ]
+                            [ firstNoteTime, initEffBpm, initBeats, 4 ],
+                            [ firstNoteTime, initMult ],
+                            Some(initEffBpm, initBeats),
+                            initMult
                         else
-                            [], []
-                    | _ -> [], []
+                            [], [], None, 1.0
+                    | _ -> [], [], None, 1.0
 
-                let _, _, _, _, revBpms, revSvs =
+                let _, _, _, _, _, _, revBpms, revSvs =
                     allTimes
                     |> List.fold
-                        (fun (effBpm, bpmFactor, beats, rawSv, accBpms, accSvs) time ->
+                        (fun (effBpm, bpmFactor, beats, rawSv, lastBpm, lastSv, accBpms, accSvs) time ->
                             let tp = Map.tryFind time tpByTime
 
                             let nextRawSv =
@@ -164,14 +172,36 @@ module Convert =
                                     nextRawSv * nextBpmFactor
 
                             let effMult = if rawMult = 0.0 then 0.0 else rawMult
+                            let bpmState = Some(nextEffBpm, nextBeats)
+
+                            let nextAccBpms, nextLastBpm =
+                                if bpmState <> lastBpm then
+                                    (time, nextEffBpm, nextBeats, 4) :: accBpms, bpmState
+                                else
+                                    accBpms, lastBpm
+
+                            let nextAccSvs, nextLastSv =
+                                if effMult <> lastSv then
+                                    (time, effMult) :: accSvs, effMult
+                                else
+                                    accSvs, lastSv
 
                             nextEffBpm,
                             nextBpmFactor,
                             nextBeats,
                             nextRawSv,
-                            (time, nextEffBpm, nextBeats, 4) :: accBpms,
-                            (time, effMult) :: accSvs)
-                        (initEffBpm, initBpmFactor, initBeats, initRawSv, List.rev initBpms, List.rev initSvs)
+                            nextLastBpm,
+                            nextLastSv,
+                            nextAccBpms,
+                            nextAccSvs)
+                        (initEffBpm,
+                         initBpmFactor,
+                         initBeats,
+                         initRawSv,
+                         initLastBpm,
+                         initLastSv,
+                         List.rev initBpms,
+                         List.rev initSvs)
 
                 let anchorPoints =
                     nonzeroTps |> List.map (fun tp -> tp.StartTime, abs tp.Bpm, tp.Signature, 4)

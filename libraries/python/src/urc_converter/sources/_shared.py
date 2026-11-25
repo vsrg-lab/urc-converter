@@ -1,6 +1,7 @@
 """Shared merge and validation helpers for converters."""
 
 import math
+from bisect import bisect_left
 from itertools import groupby
 
 from ..error import UrcError
@@ -83,13 +84,10 @@ def build_timing(
 
 	if measure_anchor_ms is not None:
 		anchor = round_ms(measure_anchor_ms)
-		if all(entry[0] != anchor for entry in emitted):
-			active = emitted[0]
-			for entry in emitted:
-				if entry[0] < anchor:
-					active = entry
-			emitted.append((anchor, *active[1:]))
-			emitted.sort(key=lambda entry: entry[0])
+		idx = bisect_left(emitted, anchor, key=lambda entry: entry[0])
+		if idx == len(emitted) or emitted[idx][0] != anchor:
+			active = emitted[idx - 1] if idx > 0 else emitted[0]
+			emitted.insert(idx, (anchor, *active[1:]))
 
 	shifted: dict[int, tuple[float, float, int, int]] = {}
 	for time, bpm, multiplier, beats, note_value in emitted:
@@ -102,7 +100,7 @@ def build_timing(
 			meter=Meter(beats=beats, note_value=note_value),
 			multiplier=multiplier if multiplier != 1.0 else None,
 		)
-		for time, (bpm, multiplier, beats, note_value) in sorted(shifted.items())
+		for time, (bpm, multiplier, beats, note_value) in shifted.items()
 	]
 
 	if points[0].timestamp_ms != 0:
@@ -117,8 +115,15 @@ def build_timing(
 def check_hold_overlap(notes: list[Note]) -> None:
 	"""Reject holds that overlap on the same lane."""
 	open_lanes: set[int] = set()
+	is_sorted = True
+	for i in range(1, len(notes)):
+		prev, curr = notes[i - 1], notes[i]
+		if (prev.timestamp_ms, prev.lane) > (curr.timestamp_ms, curr.lane):
+			is_sorted = False
+			break
+	ordered = notes if is_sorted else sorted(notes, key=lambda item: (item.timestamp_ms, item.lane))
 
-	for note in sorted(notes, key=lambda item: (item.timestamp_ms, item.lane)):
+	for note in ordered:
 		if note.type is NoteType.LS:
 			if note.lane in open_lanes:
 				raise UrcError("syntax", 1, f"overlapping holds on lane {note.lane}")

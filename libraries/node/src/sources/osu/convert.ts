@@ -149,6 +149,9 @@ function resolveTiming(beatmap: OsuBeatmap): {
 	let currentBpm: number | null = null;
 	let currentMeter = 4;
 	let currentSv = 1;
+	let lastBpm: number | null = null;
+	let lastMeter = 4;
+	let lastSv = 1;
 
 	for (const time of allTimes) {
 		const tp = tpByTime.get(time);
@@ -163,8 +166,15 @@ function resolveTiming(beatmap: OsuBeatmap): {
 		if (currentBpm === null)
 			continue;
 
-		bpmPoints.push([time, currentBpm, currentMeter, 4]);
-		svPoints.push([time, currentSv]);
+		if (currentBpm !== lastBpm || currentMeter !== lastMeter) {
+			bpmPoints.push([time, currentBpm, currentMeter, 4]);
+			lastBpm = currentBpm;
+			lastMeter = currentMeter;
+		}
+		if (currentSv !== lastSv) {
+			svPoints.push([time, currentSv]);
+			lastSv = currentSv;
+		}
 	}
 
 	return { bpmPoints, svPoints, anchorPoints };

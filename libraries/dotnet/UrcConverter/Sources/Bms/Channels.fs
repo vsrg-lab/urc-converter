@@ -188,7 +188,7 @@ module internal Channels =
         (chart: BmsChart)
         (mode: BmsMode)
         (objects: (float * string * string) list)
-        (timed: Map<int, float>)
+        (timed: float[])
         : Result<(int * int * NoteType) list, UrcError> =
         let streams =
             objects
@@ -199,7 +199,7 @@ module internal Channels =
                 let sortedStream =
                     group
                     |> List.sortBy (fun (_, (y, _, _)) -> y)
-                    |> List.map (fun (idx, (_, _, obj)) -> Map.find idx timed, obj)
+                    |> List.map (fun (idx, (_, _, obj)) -> timed[idx], obj)
 
                 channel, sortedStream)
 

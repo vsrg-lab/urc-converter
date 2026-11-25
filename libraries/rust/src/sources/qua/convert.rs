@@ -1,6 +1,6 @@
 //! Mapper from the Quaver source model onto a URC chart.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::error::{Result, UrcError};
 use crate::model::{Chart, Layout, Metadata, Note, NoteType, Version};
@@ -169,6 +169,7 @@ fn common_bpm(nonzero_tps: &[&QuaTimingPoint], hit_objects: &[QuaHitObject]) -> 
         .unwrap_or(0);
 
     let mut durations: Vec<(f64, i64)> = Vec::new();
+    let mut index_by_bpm: HashMap<u64, usize> = HashMap::new();
     for (index, point) in nonzero_tps.iter().enumerate().rev() {
         if point.start_time > last_time {
             continue;
@@ -176,9 +177,11 @@ fn common_bpm(nonzero_tps: &[&QuaTimingPoint], hit_objects: &[QuaHitObject]) -> 
         let duration = last_time - if index == 0 { 0 } else { point.start_time };
         last_time = point.start_time;
         let bpm = point.bpm.abs();
-        if let Some(entry) = durations.iter_mut().find(|(b, _)| *b == bpm) {
-            entry.1 += duration;
+        let bits = bpm.to_bits();
+        if let Some(&slot) = index_by_bpm.get(&bits) {
+            durations[slot].1 += duration;
         } else {
+            index_by_bpm.insert(bits, durations.len());
             durations.push((bpm, duration));
         }
     }
@@ -259,13 +262,15 @@ fn resolve_timing(qua: &QuaMap, first_note_time: i64) -> Result<ResolvedTiming> 
         1.0
     };
 
-    let all_times: BTreeSet<i64> = tp_by_time
-        .keys()
-        .chain(sv_by_time.keys())
-        .copied()
-        .collect();
+    let mut all_times: Vec<i64> = Vec::with_capacity(tp_by_time.len() + sv_by_time.len());
+    all_times.extend(tp_by_time.keys().copied());
+    all_times.extend(sv_by_time.keys().copied());
+    all_times.sort_unstable();
+    all_times.dedup();
     let mut bpm_points: Vec<(i64, f64, u64, u64)> = Vec::new();
     let mut sv_points: Vec<(i64, f64)> = Vec::new();
+    let mut last_bpm: Option<(f64, u64)> = None;
+    let mut last_sv = 1.0_f64;
 
     if qua.bpm_does_not_affect_sv
         && let Some(&first_time) = all_times.first()
@@ -282,6 +287,8 @@ fn resolve_timing(qua: &QuaMap, first_note_time: i64) -> Result<ResolvedTiming> 
         if init_mult != 1.0 {
             bpm_points.push((first_note_time, eff_bpm, beats, 4));
             sv_points.push((first_note_time, init_mult));
+            last_bpm = Some((eff_bpm, beats));
+            last_sv = init_mult;
         }
     }
 
@@ -319,8 +326,15 @@ fn resolve_timing(qua: &QuaMap, first_note_time: i64) -> Result<ResolvedTiming> 
             eff_mult = 0.0;
         }
 
-        bpm_points.push((time, eff_bpm, beats, 4));
-        sv_points.push((time, eff_mult));
+        let bpm_state = Some((eff_bpm, beats));
+        if bpm_state != last_bpm {
+            bpm_points.push((time, eff_bpm, beats, 4));
+            last_bpm = bpm_state;
+        }
+        if eff_mult != last_sv {
+            sv_points.push((time, eff_mult));
+            last_sv = eff_mult;
+        }
     }
 
     let anchor_points: Vec<(i64, f64, u64, u64)> = nonzero_tps

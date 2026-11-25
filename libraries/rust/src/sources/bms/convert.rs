@@ -1,6 +1,6 @@
 //! Mapper from the BMS-family source model onto a URC chart.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::error::{Result, UrcError};
 use crate::model::{Chart, Layout, Metadata, Note, NoteType, Version};
@@ -11,6 +11,56 @@ use super::model::BmsChart;
 const MEASURE_US: f64 = 240_000_000.0;
 
 const SYSTEM_CHANNELS: [&str; 5] = ["02", "03", "08", "09", "SC"];
+
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
+fn channel_slots(lines: &[Vec<String>], keep_zero: bool) -> Vec<(f64, &str)> {
+    if lines.len() == 1 {
+        let ids = &lines[0];
+        let total = ids.len() as f64;
+        return ids
+            .iter()
+            .enumerate()
+            .filter(|(_, obj)| keep_zero || obj.as_str() != "00")
+            .map(|(idx, obj)| (idx as f64 / total, obj.as_str()))
+            .collect();
+    }
+
+    let mut slots: HashMap<(usize, usize), &str> = HashMap::new();
+    for ids in lines {
+        let total = ids.len();
+        for (idx, obj) in ids.iter().enumerate() {
+            if obj == "00" && !keep_zero {
+                continue;
+            }
+            let divisor = gcd(idx, total);
+            let key = (idx / divisor, total / divisor);
+            if obj != "00" {
+                slots.insert(key, obj.as_str());
+            } else {
+                slots.entry(key).or_insert("00");
+            }
+        }
+    }
+
+    let mut ordered: Vec<((usize, usize), &str)> = slots.into_iter().collect();
+    ordered.sort_by(|(a, _), (b, _)| {
+        let lhs = (a.0 as u128) * (b.1 as u128);
+        let rhs = (b.0 as u128) * (a.1 as u128);
+        lhs.cmp(&rhs)
+    });
+    ordered
+        .into_iter()
+        .map(|((num, den), obj)| (num as f64 / den as f64, obj))
+        .collect()
+}
 
 fn hex_bpm(obj: &str) -> Result<f64> {
     u64::from_str_radix(obj, 16)
@@ -64,14 +114,16 @@ pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
         }
 
         if let Some(measure_map) = chart.measures.get(&m) {
-            for (channel, ids) in measure_map {
-                for (idx, obj) in ids.iter().enumerate() {
-                    let y = boundaries[m as usize] + (idx as f64 / ids.len() as f64) * rate;
+            for (channel, lines) in measure_map {
+                let is_system = SYSTEM_CHANNELS.contains(&channel.as_str());
+                let kind = if is_system { None } else { channel_kind(channel) };
+                if !is_system && kind.is_none() {
+                    continue;
+                }
+                for (pos, obj) in channel_slots(lines, kind == Some("ln") && chart.lntype == 2) {
+                    let y = boundaries[m as usize] + pos * rate;
 
-                    if SYSTEM_CHANNELS.contains(&channel.as_str()) {
-                        if obj == "00" {
-                            continue;
-                        }
+                    if is_system {
                         if channel == "03" {
                             let bpm_val = hex_bpm(obj)?;
                             entries.push((y, 0, EntryKind::Bpm(bpm_val)));
@@ -102,11 +154,7 @@ pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
                         continue;
                     }
 
-                    let kind = match channel_kind(channel) {
-                        Some(k) => k,
-                        None => continue,
-                    };
-                    if kind == "ln" {
+                    if kind == Some("ln") {
                         ln_channels.insert(channel.clone());
                     }
                     if obj != "00" {
@@ -114,11 +162,8 @@ pub fn convert_bms(chart: &BmsChart) -> Result<Chart> {
                         let second = channel.chars().nth(1).unwrap();
                         used.insert((side, second));
                     }
-                    if obj == "00" && kind != "ln" {
-                        continue;
-                    }
 
-                    objects.push((y, channel.clone(), obj.clone()));
+                    objects.push((y, channel.clone(), obj.to_string()));
                     entries.push((y, 4, EntryKind::Object(objects.len() - 1)));
                 }
             }

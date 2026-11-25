@@ -90,15 +90,23 @@ fn convert_chart(simfile: &SmFile, chart: &SmChart) -> Result<Chart> {
     for &(beat, ratio) in &timing.scrolls {
         entries.push((rows(beat), 6, EntryKind::Scroll, EntryValue::Number(ratio)));
     }
-    let max_row = entries.iter().map(|entry| entry.0).max().unwrap_or(0);
-    let anchor_limit = max_row + MEASURE_ROWS;
-    let mut row = 0;
-    while row < anchor_limit {
-        entries.push((row, 2, EntryKind::Anchor, EntryValue::Row(0)));
-        row += MEASURE_ROWS;
+    if let Some(first_note_row) = notes.iter().map(|note| note.row).min() {
+        let floor_measure = (first_note_row.max(0) / MEASURE_ROWS) * MEASURE_ROWS;
+        entries.push((floor_measure, 2, EntryKind::Anchor, EntryValue::Row(0)));
+        if first_note_row > floor_measure {
+            entries.push((
+                floor_measure + MEASURE_ROWS,
+                2,
+                EntryKind::Anchor,
+                EntryValue::Row(0),
+            ));
+        }
+    } else {
+        entries.push((0, 2, EntryKind::Anchor, EntryValue::Row(0)));
     }
+    let max_row = entries.iter().map(|entry| entry.0).max().unwrap_or(0);
     for &(_, dest) in &intervals {
-        if dest <= anchor_limit {
+        if dest <= max_row {
             entries.push((dest, 0, EntryKind::WarpEnd, EntryValue::Row(0)));
         }
     }

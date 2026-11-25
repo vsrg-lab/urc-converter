@@ -80,11 +80,17 @@ def _convert_chart(simfile: SmFile, chart: SmChart) -> Chart:
 		entries.append((rows(beat), 5, "timesig", (numerator, denominator)))
 	for beat, ratio in timing.scrolls:
 		entries.append((rows(beat), 6, "scroll", ratio))
+	if notes:
+		first_note_row = min(note.row for note in notes)
+		floor_measure = (max(first_note_row, 0) // _MEASURE_ROWS) * _MEASURE_ROWS
+		entries.append((floor_measure, 2, "anchor", None))
+		if first_note_row > floor_measure:
+			entries.append((floor_measure + _MEASURE_ROWS, 2, "anchor", None))
+	else:
+		entries.append((0, 2, "anchor", None))
 	max_row = max((entry[0] for entry in entries), default=0)
-	anchor_limit = max_row + _MEASURE_ROWS
-	entries.extend((row, 2, "anchor", None) for row in range(0, anchor_limit, _MEASURE_ROWS))
 	for _start, dest in intervals:
-		if dest <= anchor_limit:
+		if dest <= max_row:
 			entries.append((dest, 0, "warp_end", None))
 
 	head_times: list[float] = [0.0] * len(notes)

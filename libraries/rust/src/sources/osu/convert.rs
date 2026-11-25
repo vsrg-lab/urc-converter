@@ -1,7 +1,7 @@
 //! Mapper from the osu!mania source model onto a URC chart.
 
 use std::cmp::{max, min};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::error::{Result, UrcError};
 use crate::model::{Chart, Judgment, Layout, Metadata, Note, NoteType, Version};
@@ -216,11 +216,11 @@ fn resolve_timing(beatmap: &OsuBeatmap) -> Result<ResolvedTiming> {
         return Err(UrcError::new("syntax", 1, ".osu: no BPM timing point"));
     }
 
-    let all_times: BTreeSet<i64> = tp_by_time
-        .keys()
-        .chain(sv_by_time.keys())
-        .copied()
-        .collect();
+    let mut all_times: Vec<i64> = Vec::with_capacity(tp_by_time.len() + sv_by_time.len());
+    all_times.extend(tp_by_time.keys().copied());
+    all_times.extend(sv_by_time.keys().copied());
+    all_times.sort_unstable();
+    all_times.dedup();
     let mut bpm_points: Vec<(i64, f64, u64, u64)> = Vec::new();
     let mut sv_points: Vec<(i64, f64)> = Vec::new();
     let anchor_points: Vec<(i64, f64, u64, u64)> = tp_by_time
@@ -231,6 +231,8 @@ fn resolve_timing(beatmap: &OsuBeatmap) -> Result<ResolvedTiming> {
     let mut current_bpm: Option<f64> = None;
     let mut current_meter = 4_u64;
     let mut current_sv = 1.0_f64;
+    let mut last_bpm: Option<(f64, u64)> = None;
+    let mut last_sv = 1.0_f64;
 
     for time in all_times {
         let tp = tp_by_time.get(&time).copied();
@@ -246,8 +248,15 @@ fn resolve_timing(beatmap: &OsuBeatmap) -> Result<ResolvedTiming> {
         }
 
         if let Some(bpm) = current_bpm {
-            bpm_points.push((time, bpm, current_meter, 4));
-            sv_points.push((time, current_sv));
+            let bpm_state = Some((bpm, current_meter));
+            if bpm_state != last_bpm {
+                bpm_points.push((time, bpm, current_meter, 4));
+                last_bpm = bpm_state;
+            }
+            if current_sv != last_sv {
+                sv_points.push((time, current_sv));
+                last_sv = current_sv;
+            }
         }
     }
 

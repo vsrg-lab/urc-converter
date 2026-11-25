@@ -1,12 +1,15 @@
 """Parser for .qua YAML text."""
 
 import math
+from collections.abc import Iterator
 
 import yaml
 
 from ...error import UrcError
 from .._shared import round_ms
 from .model import QuaHitObject, QuaMap, QuaSvPoint, QuaTimingPoint
+
+_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 _MODE_NAMES = {
 	"keys4": 1,
@@ -24,57 +27,82 @@ _MODE_NAMES = {
 _SIGNATURE_NAMES = {"quadruple": 4, "triple": 3}
 _HIT_OBJECT_TYPES = {"normal": 0, "mine": 1}
 _NULL_TAG = "tag:yaml.org,2002:null"
+_NULL_VALUES = frozenset({"", "~", "null", "Null", "NULL"})
+
+
+class _EventStream:
+	def __init__(self, text: str) -> None:
+		try:
+			self._events: Iterator[yaml.Event] = yaml.parse(text, Loader=_LOADER)
+		except yaml.YAMLError as error:
+			raise UrcError("syntax", _yaml_line(error), f"invalid YAML: {error}") from None
+
+	def next(self) -> yaml.Event:
+		try:
+			return next(self._events)
+		except yaml.YAMLError as error:
+			raise UrcError("syntax", _yaml_line(error), f"invalid YAML: {error}") from None
+		except StopIteration:
+			raise UrcError("syntax", 1, "unexpected end of YAML stream") from None
 
 
 def parse_qua(text: str) -> QuaMap:
 	"""Parse .qua YAML text into a source model."""
 	cleaned = text.lstrip("\ufeff")
-	try:
-		root = yaml.compose(cleaned, Loader=yaml.SafeLoader)
-	except yaml.YAMLError as error:
-		raise UrcError("syntax", _yaml_line(error), f"invalid YAML: {error}") from None
+	stream = _EventStream(cleaned)
 
-	if not isinstance(root, yaml.MappingNode):
+	# StreamStartEvent -> DocumentStartEvent (or StreamEndEvent for empty input)
+	stream.next()
+	doc_event = stream.next()
+	if isinstance(doc_event, yaml.StreamEndEvent):
 		raise UrcError("syntax", 1, ".qua must be a YAML mapping")
 
-	fields = _mapping(root)
-	qua = QuaMap(
-		mode=_mode(fields),
-		has_scratch_key=_bool(fields, "HasScratchKey", False),
-		bpm_does_not_affect_sv=_bool(fields, "BPMDoesNotAffectScrollVelocity", False),
-		initial_scroll_velocity=_float(fields, "InitialScrollVelocity", 0.0),
-		title=_str(fields, "Title"),
-		artist=_str(fields, "Artist"),
-		creator=_str(fields, "Creator"),
-		difficulty_name=_str(fields, "DifficultyName"),
-	)
+	root_event = stream.next()
+	if not isinstance(root_event, yaml.MappingStartEvent):
+		raise UrcError("syntax", 1, ".qua must be a YAML mapping")
 
-	for entry in _entries(fields, "TimingPoints"):
-		qua.timing_points.append(
-			QuaTimingPoint(
-				start_time=round_ms(_float(entry, "StartTime", 0.0)),
-				bpm=_float(entry, "Bpm", 0.0),
-				signature=_signature(entry),
-			)
-		)
+	qua = QuaMap()
+	while True:
+		key_event = stream.next()
+		if isinstance(key_event, yaml.MappingEndEvent):
+			break
+		if not isinstance(key_event, yaml.ScalarEvent):
+			_skip_value(stream, key_event)
+			_skip_value(stream, stream.next())
+			continue
 
-	for entry in _entries(fields, "SliderVelocities"):
-		qua.sv_points.append(
-			QuaSvPoint(
-				start_time=round_ms(_float(entry, "StartTime", 0.0)),
-				multiplier=_float(entry, "Multiplier", 0.0),
-			)
-		)
+		key = key_event.value
+		val_event = stream.next()
+		if key == "Mode":
+			qua.mode = _parse_mode(val_event)
+		elif key == "HasScratchKey":
+			qua.has_scratch_key = _parse_bool(val_event, key, False)
+		elif key == "BPMDoesNotAffectScrollVelocity":
+			qua.bpm_does_not_affect_sv = _parse_bool(val_event, key, False)
+		elif key == "InitialScrollVelocity":
+			qua.initial_scroll_velocity = _parse_float(val_event, key, 0.0)
+		elif key == "Title":
+			qua.title = _parse_str(val_event, key)
+		elif key == "Artist":
+			qua.artist = _parse_str(val_event, key)
+		elif key == "Creator":
+			qua.creator = _parse_str(val_event, key)
+		elif key == "DifficultyName":
+			qua.difficulty_name = _parse_str(val_event, key)
+		elif key == "TimingPoints":
+			qua.timing_points = _read_timing_points(stream, val_event)
+		elif key == "SliderVelocities":
+			qua.sv_points = _read_sv_points(stream, val_event)
+		elif key == "HitObjects":
+			qua.hit_objects = _read_hit_objects(stream, val_event)
+		else:
+			_skip_value(stream, val_event)
 
-	for entry in _entries(fields, "HitObjects"):
-		qua.hit_objects.append(
-			QuaHitObject(
-				start_time=round_ms(_float(entry, "StartTime", 0.0)),
-				lane=_int(entry, "Lane", 0),
-				end_time=round_ms(_float(entry, "EndTime", 0.0)),
-				mine=_hit_object_type(entry) == 1,
-			)
-		)
+	# DocumentEndEvent -> StreamEndEvent
+	stream.next()
+	trailing = stream.next()
+	if not isinstance(trailing, yaml.StreamEndEvent):
+		raise UrcError("syntax", _event_line(trailing), "invalid YAML: expected a single document")
 
 	return qua
 
@@ -84,55 +112,173 @@ def _yaml_line(error: yaml.YAMLError) -> int:
 	return mark.line + 1 if mark else 1
 
 
-def _node_line(node: yaml.Node) -> int:
-	return node.start_mark.line + 1 if node.start_mark else 1
+def _event_line(event: yaml.Event) -> int:
+	return event.start_mark.line + 1 if event.start_mark else 1
 
 
-def _is_null(node: yaml.Node) -> bool:
-	return isinstance(node, yaml.ScalarNode) and node.tag == _NULL_TAG
+def _is_null(event: yaml.ScalarEvent) -> bool:
+	return event.tag == _NULL_TAG or (
+		event.tag is None and event.implicit[0] and event.value in _NULL_VALUES
+	)
 
 
-def _mapping(node: yaml.MappingNode) -> dict[str, yaml.Node]:
-	result: dict[str, yaml.Node] = {}
-	for key_node, value_node in node.value:
-		if isinstance(key_node, yaml.ScalarNode):
-			result[key_node.value] = value_node
-	return result
+def _skip_value(stream: _EventStream, first: yaml.Event) -> None:
+	if isinstance(first, yaml.ScalarEvent):
+		return
+	if isinstance(first, yaml.AliasEvent):
+		raise UrcError("syntax", _event_line(first), "YAML aliases are not supported")
+	if isinstance(first, (yaml.MappingStartEvent, yaml.SequenceStartEvent)):
+		depth = 1
+		while depth > 0:
+			event = stream.next()
+			if isinstance(event, (yaml.MappingStartEvent, yaml.SequenceStartEvent)):
+				depth += 1
+			elif isinstance(event, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
+				depth -= 1
+			elif isinstance(event, yaml.AliasEvent):
+				raise UrcError("syntax", _event_line(event), "YAML aliases are not supported")
 
 
-def _entries(fields: dict[str, yaml.Node], key: str) -> list[dict[str, yaml.Node]]:
-	node = fields.get(key)
-	if node is None or _is_null(node):
+def _read_timing_points(stream: _EventStream, first: yaml.Event) -> list[QuaTimingPoint]:
+	if isinstance(first, yaml.ScalarEvent) and _is_null(first):
 		return []
-	if not isinstance(node, yaml.SequenceNode):
-		raise UrcError("syntax", _node_line(node), f"{key} must be a list of mappings")
-	items: list[dict[str, yaml.Node]] = []
-	for item in node.value:
-		if not isinstance(item, yaml.MappingNode):
-			raise UrcError("syntax", _node_line(item), f"{key} must be a list of mappings")
-		items.append(_mapping(item))
-	return items
+	if not isinstance(first, yaml.SequenceStartEvent):
+		raise UrcError("syntax", _event_line(first), "TimingPoints must be a list of mappings")
+
+	points: list[QuaTimingPoint] = []
+	while True:
+		item_event = stream.next()
+		if isinstance(item_event, yaml.SequenceEndEvent):
+			break
+		if not isinstance(item_event, yaml.MappingStartEvent):
+			raise UrcError(
+				"syntax", _event_line(item_event), "TimingPoints must be a list of mappings"
+			)
+		start_time = 0
+		bpm = 0.0
+		signature = 4
+		while True:
+			key_event = stream.next()
+			if isinstance(key_event, yaml.MappingEndEvent):
+				break
+			if not isinstance(key_event, yaml.ScalarEvent):
+				_skip_value(stream, key_event)
+				_skip_value(stream, stream.next())
+				continue
+			key = key_event.value
+			val_event = stream.next()
+			if key == "StartTime":
+				start_time = round_ms(_parse_float(val_event, key, 0.0))
+			elif key == "Bpm":
+				bpm = _parse_float(val_event, key, 0.0)
+			elif key == "Signature":
+				signature = _parse_signature(val_event)
+			else:
+				_skip_value(stream, val_event)
+		points.append(QuaTimingPoint(start_time=start_time, bpm=bpm, signature=signature))
+	return points
 
 
-def _scalar(fields: dict[str, yaml.Node], key: str) -> yaml.ScalarNode | None:
-	node = fields.get(key)
-	if node is None or _is_null(node):
-		return None
-	if not isinstance(node, yaml.ScalarNode):
-		raise UrcError("syntax", _node_line(node), f"invalid {key}")
-	return node
+def _read_sv_points(stream: _EventStream, first: yaml.Event) -> list[QuaSvPoint]:
+	if isinstance(first, yaml.ScalarEvent) and _is_null(first):
+		return []
+	if not isinstance(first, yaml.SequenceStartEvent):
+		raise UrcError("syntax", _event_line(first), "SliderVelocities must be a list of mappings")
+
+	points: list[QuaSvPoint] = []
+	while True:
+		item_event = stream.next()
+		if isinstance(item_event, yaml.SequenceEndEvent):
+			break
+		if not isinstance(item_event, yaml.MappingStartEvent):
+			raise UrcError(
+				"syntax", _event_line(item_event), "SliderVelocities must be a list of mappings"
+			)
+		start_time = 0
+		multiplier = 0.0
+		while True:
+			key_event = stream.next()
+			if isinstance(key_event, yaml.MappingEndEvent):
+				break
+			if not isinstance(key_event, yaml.ScalarEvent):
+				_skip_value(stream, key_event)
+				_skip_value(stream, stream.next())
+				continue
+			key = key_event.value
+			val_event = stream.next()
+			if key == "StartTime":
+				start_time = round_ms(_parse_float(val_event, key, 0.0))
+			elif key == "Multiplier":
+				multiplier = _parse_float(val_event, key, 0.0)
+			else:
+				_skip_value(stream, val_event)
+		points.append(QuaSvPoint(start_time=start_time, multiplier=multiplier))
+	return points
 
 
-def _str(fields: dict[str, yaml.Node], key: str) -> str | None:
-	node = _scalar(fields, key)
-	return node.value if node is not None else None
+def _read_hit_objects(stream: _EventStream, first: yaml.Event) -> list[QuaHitObject]:
+	if isinstance(first, yaml.ScalarEvent) and _is_null(first):
+		return []
+	if not isinstance(first, yaml.SequenceStartEvent):
+		raise UrcError("syntax", _event_line(first), "HitObjects must be a list of mappings")
+
+	objects: list[QuaHitObject] = []
+	while True:
+		item_event = stream.next()
+		if isinstance(item_event, yaml.SequenceEndEvent):
+			break
+		if not isinstance(item_event, yaml.MappingStartEvent):
+			raise UrcError(
+				"syntax", _event_line(item_event), "HitObjects must be a list of mappings"
+			)
+		start_time = 0
+		lane = 0
+		end_time = 0
+		mine = False
+		while True:
+			key_event = stream.next()
+			if isinstance(key_event, yaml.MappingEndEvent):
+				break
+			if not isinstance(key_event, yaml.ScalarEvent):
+				_skip_value(stream, key_event)
+				_skip_value(stream, stream.next())
+				continue
+			key = key_event.value
+			val_event = stream.next()
+			if key == "StartTime":
+				start_time = round_ms(_parse_float(val_event, key, 0.0))
+			elif key == "Lane":
+				lane = _parse_int(val_event, key, 0)
+			elif key == "EndTime":
+				end_time = round_ms(_parse_float(val_event, key, 0.0))
+			elif key == "Type":
+				mine = _parse_hit_object_type(val_event) == 1
+			else:
+				_skip_value(stream, val_event)
+		objects.append(
+			QuaHitObject(start_time=start_time, lane=lane, end_time=end_time, mine=mine)
+		)
+	return objects
 
 
-def _bool(fields: dict[str, yaml.Node], key: str, default: bool) -> bool:
-	node = _scalar(fields, key)
-	if node is None:
+def _expect_scalar(event: yaml.Event, key: str) -> yaml.ScalarEvent | None:
+	if isinstance(event, yaml.ScalarEvent):
+		return None if _is_null(event) else event
+	if isinstance(event, yaml.AliasEvent):
+		raise UrcError("syntax", _event_line(event), "YAML aliases are not supported")
+	raise UrcError("syntax", _event_line(event), f"invalid {key}")
+
+
+def _parse_str(event: yaml.Event, key: str) -> str | None:
+	scalar = _expect_scalar(event, key)
+	return scalar.value if scalar is not None else None
+
+
+def _parse_bool(event: yaml.Event, key: str, default: bool) -> bool:
+	scalar = _expect_scalar(event, key)
+	if scalar is None:
 		return default
-	lowered = node.value.strip().lower()
+	lowered = scalar.value.strip().lower()
 	if lowered == "true":
 		return True
 	if lowered == "false":
@@ -140,37 +286,37 @@ def _bool(fields: dict[str, yaml.Node], key: str, default: bool) -> bool:
 	return default
 
 
-def _float(fields: dict[str, yaml.Node], key: str, default: float) -> float:
-	node = _scalar(fields, key)
-	if node is None:
+def _parse_float(event: yaml.Event, key: str, default: float) -> float:
+	scalar = _expect_scalar(event, key)
+	if scalar is None:
 		return default
 	try:
-		value = float(node.value.strip())
+		value = float(scalar.value.strip())
 	except ValueError:
-		raise UrcError("syntax", _node_line(node), f"invalid {key}: {node.value!r}") from None
+		raise UrcError("syntax", _event_line(scalar), f"invalid {key}: {scalar.value!r}") from None
 	if not math.isfinite(value):
-		raise UrcError("syntax", _node_line(node), f"invalid {key}: {node.value!r}")
+		raise UrcError("syntax", _event_line(scalar), f"invalid {key}: {scalar.value!r}")
 	return value
 
 
-def _int(fields: dict[str, yaml.Node], key: str, default: int) -> int:
-	node = _scalar(fields, key)
-	if node is None:
+def _parse_int(event: yaml.Event, key: str, default: int) -> int:
+	scalar = _expect_scalar(event, key)
+	if scalar is None:
 		return default
 	try:
-		value = float(node.value.strip())
+		value = float(scalar.value.strip())
 	except ValueError:
-		raise UrcError("syntax", _node_line(node), f"invalid {key}: {node.value!r}") from None
+		raise UrcError("syntax", _event_line(scalar), f"invalid {key}: {scalar.value!r}") from None
 	if not math.isfinite(value):
-		raise UrcError("syntax", _node_line(node), f"invalid {key}: {node.value!r}")
+		raise UrcError("syntax", _event_line(scalar), f"invalid {key}: {scalar.value!r}")
 	return round_ms(value)
 
 
-def _mode(fields: dict[str, yaml.Node]) -> int:
-	node = _scalar(fields, "Mode")
-	if node is None:
+def _parse_mode(event: yaml.Event) -> int:
+	scalar = _expect_scalar(event, "Mode")
+	if scalar is None:
 		return 1
-	raw = node.value.strip()
+	raw = scalar.value.strip()
 	mapped = _MODE_NAMES.get(raw.lower())
 	if mapped is not None:
 		return mapped
@@ -178,15 +324,15 @@ def _mode(fields: dict[str, yaml.Node]) -> int:
 		return int(raw)
 	except ValueError:
 		raise UrcError(
-			"unsupported-version", _node_line(node), f"unsupported Quaver mode: {raw}"
+			"unsupported-version", _event_line(scalar), f"unsupported Quaver mode: {raw}"
 		) from None
 
 
-def _signature(fields: dict[str, yaml.Node]) -> int:
-	node = _scalar(fields, "Signature")
-	if node is None:
+def _parse_signature(event: yaml.Event) -> int:
+	scalar = _expect_scalar(event, "Signature")
+	if scalar is None:
 		return 4
-	raw = node.value.strip()
+	raw = scalar.value.strip()
 	mapped = _SIGNATURE_NAMES.get(raw.lower())
 	if mapped is not None:
 		return mapped
@@ -194,20 +340,20 @@ def _signature(fields: dict[str, yaml.Node]) -> int:
 		value = int(raw)
 	except ValueError:
 		raise UrcError(
-			"syntax", _node_line(node), f"unsupported time signature: {raw}"
+			"syntax", _event_line(scalar), f"unsupported time signature: {raw}"
 		) from None
 	if value == 0:
 		return 4
 	if value < 1:
-		raise UrcError("syntax", _node_line(node), f"unsupported time signature: {value}")
+		raise UrcError("syntax", _event_line(scalar), f"unsupported time signature: {value}")
 	return value
 
 
-def _hit_object_type(fields: dict[str, yaml.Node]) -> int:
-	node = _scalar(fields, "Type")
-	if node is None:
+def _parse_hit_object_type(event: yaml.Event) -> int:
+	scalar = _expect_scalar(event, "Type")
+	if scalar is None:
 		return 0
-	raw = node.value.strip()
+	raw = scalar.value.strip()
 	mapped = _HIT_OBJECT_TYPES.get(raw.lower())
 	if mapped is not None:
 		return mapped
@@ -215,8 +361,8 @@ def _hit_object_type(fields: dict[str, yaml.Node]) -> int:
 		value = int(raw)
 	except ValueError:
 		raise UrcError(
-			"syntax", _node_line(node), f"unsupported hit object type: {raw}"
+			"syntax", _event_line(scalar), f"unsupported hit object type: {raw}"
 		) from None
 	if value not in (0, 1):
-		raise UrcError("syntax", _node_line(node), f"unsupported hit object type: {value}")
+		raise UrcError("syntax", _event_line(scalar), f"unsupported hit object type: {value}")
 	return value

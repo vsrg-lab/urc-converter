@@ -17,5 +17,5 @@ pub struct BmsChart {
     pub stop_defs: BTreeMap<String, f64>,
     pub scroll_defs: BTreeMap<String, f64>,
     pub rates: BTreeMap<i64, f64>,
-    pub measures: BTreeMap<i64, BTreeMap<String, Vec<String>>>,
+    pub measures: BTreeMap<i64, BTreeMap<String, Vec<Vec<String>>>>,
 }

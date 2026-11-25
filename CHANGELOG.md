@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.0] - 2026-11-25
+
+### Changed
+
+- **BMS / PMS (`.bms`, `.bme`, `.bml`, `.pms`)**:
+  - Replaced dense LCM-based channel overlay with sparse rational-position merging (`O(sum(len))` time and memory) and changed `BmsChart.measures` (`Measures` in F#) to store raw per-channel line lists instead of a single pre-merged slot array.
+  - Validated syntax on unused channels (BGM channel `01`, BGA, invisible notes, etc.) while skipping storage, avoided redundant line splitting during `#BASE` scanning, and stopped emitting zero slots on `#LNTYPE 1` long-note channels.
+  - Replaced F# BMS note timing `Map` lookups with direct array indexing.
+- **Quaver (`.qua`) & osu!mania (`.osu`)**:
+  - Switched Python `.qua` parsing from full AST construction (`yaml.compose` with `SafeLoader`) to streaming event parsing (`yaml.parse` with `CSafeLoader`, falling back to `SafeLoader`), skipping unused sections in `O(1)` memory.
+  - Stopped emitting redundant unchanged BPM and scroll velocity entries at every SV timestamp across all four languages.
+  - Replaced `O(N^2)` BPM duration aggregation in Rust and F# `common_bpm` with `O(N)` map-indexed lookups and switched Rust timestamp deduplication from `BTreeSet` to sorted `Vec::dedup`.
+- **StepMania (`.sm`, `.ssc`) & O2Jam (`.ojn`)**:
+  - Replaced full-song measure anchor sweeps in StepMania with `O(1)` first-note measure boundary anchors, and skipped empty O2Jam measure gaps in `O(1)` arithmetic instead of measure-by-measure loops.
+  - Optimized MSD tokenization across all four languages (boolean line-visibility tracking, contiguous run slicing, UTF-8 byte scanning in Rust, and `StringBuilder` in F#) and replaced F# StepMania timing `Map`s with arrays.
+- **Shared timing & URC core parser**:
+  - Used binary search for measure-anchor insertion in `build_timing`, avoided redundant re-sorting of already-ordered timestamps, and skipped copying/sorting in `check_hold_overlap` when notes are already sorted.
+  - Streamed lines via `io.StringIO` and sorted notes in place in the Python URC parser.
+
+### Fixed
+
+- **BMS (`MemoryError` / OOM)**: Fixed out-of-memory crashes on real keysounded BMS charts where repeated coprime-length channel lines (especially channel `01` BGM) caused exponential LCM array blowup, and eliminated phantom `"00"` gaps on coprime `#LNTYPE 2` overlays.
+- **StepMania & O2Jam (potential OOM)**: Prevented out-of-memory allocations and hangs on charts with extreme `#SCROLLS`/`#BPMS`/`#WARPS` beat positions or large O2Jam measure gaps.
+
 ## [0.3.0] - 2026-11-24
 
 ### Changed

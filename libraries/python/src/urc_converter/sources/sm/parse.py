@@ -170,66 +170,76 @@ def _tokenize(text: str) -> list[list[str]]:
 	values: list[list[str]] = []
 	params: list[str] = []
 	current: list[str] = []
-	line: list[str] = []
+	line_has_visible = False
 	reading = False
 
 	def end_param() -> None:
+		nonlocal line_has_visible
 		params.append("".join(current))
 		current.clear()
-		line.clear()
+		line_has_visible = False
 
 	i = 0
 	n = len(text)
 	while i < n:
-		if i + 1 < n and text[i] == "/" and text[i + 1] == "/":
+		ch = text[i]
+		if ch == "/" and i + 1 < n and text[i + 1] == "/":
 			while i < n and text[i] not in ("\n", "\r"):
 				i += 1
 			continue
-		if reading and text[i] == "#":
-			if "".join(line).strip(" \t"):
+		if reading and ch == "#":
+			if line_has_visible:
 				current.append("#")
-				line.append("#")
 				i += 1
 				continue
 			params.append("".join(current).rstrip(" \t\r\n"))
 			values.append(params)
 			params = []
 			current = []
-			line = []
+			line_has_visible = False
 			reading = False
 			continue
 		if not reading:
-			if text[i] == "#":
+			if ch == "#":
 				reading = True
-				line.clear()
-			elif text[i] != "\\":
-				i += 1
-				continue
-			elif i + 1 < n:
+				line_has_visible = False
+			elif ch == "\\" and i + 1 < n:
 				i += 2
 				continue
 			i += 1
 			continue
-		if text[i] == ":":
+		if ch == ":":
 			end_param()
-		elif text[i] == ";":
+			i += 1
+		elif ch == ";":
 			end_param()
 			values.append(params)
 			params = []
 			current = []
-			line = []
 			reading = False
-		elif text[i] == "\\":
+			i += 1
+		elif ch == "\\":
 			i += 1
 			if i < n:
-				current.append(text[i])
-				line.append(text[i])
+				escaped = text[i]
+				current.append(escaped)
+				if escaped in ("\r", "\n"):
+					line_has_visible = False
+				elif escaped not in (" ", "\t"):
+					line_has_visible = True
+				i += 1
 		else:
-			current.append(text[i])
-			line.append(text[i])
-		if i < n and text[i] in "\r\n":
-			line.clear()
-		i += 1
+			start = i
+			while i < n:
+				c = text[i]
+				if c in ("#", ":", ";", "\\") or (c == "/" and i + 1 < n and text[i + 1] == "/"):
+					break
+				if c in ("\r", "\n"):
+					line_has_visible = False
+				elif c not in (" ", "\t"):
+					line_has_visible = True
+				i += 1
+			current.append(text[start:i])
 
 	if reading:
 		params.append("".join(current))

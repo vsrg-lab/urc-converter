@@ -1,5 +1,7 @@
 """Mapper from the BMS-family source model onto a URC chart."""
 
+import math
+from functools import cmp_to_key
 from itertools import groupby
 
 from ...error import UrcError
@@ -45,13 +47,16 @@ def convert_bms(chart: BmsChart) -> Chart:
 			if abs(beats - round(beats)) < 1e-9 and round(beats) >= 1:
 				entries.append((boundaries[measure], 3, "meter", round(beats)))
 
-		for channel, ids in sorted(chart.measures.get(measure, {}).items()):
-			for index, obj in enumerate(ids):
-				y = boundaries[measure] + (index / len(ids)) * rate
+		for channel, lines in sorted(chart.measures.get(measure, {}).items()):
+			is_system = channel in _SYSTEM_CHANNELS
+			kind = None if is_system else _channel_kind(channel)
+			if not is_system and kind is None:
+				continue
+			keep_zero = kind == "ln" and chart.lntype == 2
+			for pos, obj in _channel_slots(lines, keep_zero):
+				y = boundaries[measure] + pos * rate
 
-				if channel in _SYSTEM_CHANNELS:
-					if obj == "00":
-						continue
+				if is_system:
 					if channel == "03":
 						bpm_val = _hex_bpm(obj)
 						entries.append((y, 0, "bpm", bpm_val))
@@ -72,15 +77,10 @@ def convert_bms(chart: BmsChart) -> Chart:
 						entries.append((y, 2, "scroll", chart.scroll_defs[obj]))
 					continue
 
-				kind = _channel_kind(channel)
-				if kind is None:
-					continue
 				if kind == "ln":
 					ln_channels.add(channel)
 				if obj != "00":
 					used.add((_SIDE_OF[channel[0]], channel[1]))
-				if obj == "00" and kind != "ln":
-					continue
 				objects.append((y, channel, obj))
 				entries.append((y, 4, "object", len(objects) - 1))
 
@@ -174,6 +174,40 @@ def convert_bms(chart: BmsChart) -> Chart:
 		timing=timing,
 		notes=urc_notes,
 	)
+
+
+def _cmp_frac(a: tuple[int, int], b: tuple[int, int]) -> int:
+	diff = a[0] * b[1] - b[0] * a[1]
+	return -1 if diff < 0 else (1 if diff > 0 else 0)
+
+
+_FRAC_KEY = cmp_to_key(_cmp_frac)
+
+
+def _channel_slots(lines: list[list[str]], keep_zero: bool) -> list[tuple[float, str]]:
+	if len(lines) == 1:
+		ids = lines[0]
+		total = len(ids)
+		if keep_zero:
+			return [(index / total, obj) for index, obj in enumerate(ids)]
+		return [(index / total, obj) for index, obj in enumerate(ids) if obj != "00"]
+
+	slots: dict[tuple[int, int], str] = {}
+	for ids in lines:
+		total = len(ids)
+		for index, obj in enumerate(ids):
+			if obj == "00" and not keep_zero:
+				continue
+			divisor = math.gcd(index, total)
+			key = (index // divisor, total // divisor)
+			if obj != "00":
+				slots[key] = obj
+			elif key not in slots:
+				slots[key] = "00"
+	return [
+		(num / den, slots[(num, den)])
+		for num, den in sorted(slots, key=_FRAC_KEY)
+	]
 
 
 def _hex_bpm(obj: str) -> float:

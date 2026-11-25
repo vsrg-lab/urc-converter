@@ -16,5 +16,5 @@ export interface BmsChart {
 	stopDefs: Map<string, number>;
 	scrollDefs: Map<string, number>;
 	rates: Map<number, number>;
-	measures: Map<number, Map<string, string[]>>;
+	measures: Map<number, Map<string, string[][]>>;
 }

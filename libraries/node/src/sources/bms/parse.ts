@@ -51,43 +51,26 @@ function splitCommand(head: string): [string, string] {
 	return [head, ""];
 }
 
-function gcd(a: number, b: number): number {
-	let x = a;
-	let y = b;
-	while (y !== 0) {
-		const tmp = x % y;
-		x = y;
-		y = tmp;
-	}
-	return x;
-}
-
-function overlay(existing: string[], incoming: string[]): string[] {
-	if (existing.length === 0)
-		return [...incoming];
-	if (incoming.length === 0)
-		return existing;
-	const lenA = existing.length;
-	const lenB = incoming.length;
-	const total = (lenA / gcd(lenA, lenB)) * lenB;
-	const stepA = total / lenA;
-	const stepB = total / lenB;
-	const merged = new Array<string>(total).fill("00");
-	for (let idx = 0; idx < lenA; idx++)
-		if (existing[idx] !== "00")
-			merged[idx * stepA] = existing[idx];
-	for (let idx = 0; idx < lenB; idx++)
-		if (incoming[idx] !== "00")
-			merged[idx * stepB] = incoming[idx];
-	return merged;
+function isRelevantChannel(channel: string): boolean {
+	if (channel === "03" || channel === "08" || channel === "09" || channel === "SC")
+		return true;
+	if (channel.length !== 2)
+		return false;
+	const first = channel[0];
+	const second = channel[1];
+	return (
+		(first === "1" || first === "2" || first === "5" || first === "6" || first === "D" || first === "E") &&
+		second >= "1" &&
+		second <= "9"
+	);
 }
 
 /**
  * Parses BMS-family bytes into a source model.
  */
 export function parseBms(data: Uint8Array, options?: BmsParseOptions): BmsChart {
-	const text = decode(data);
-	const base = scanBase(text);
+	const lines = splitLines(decode(data));
+	const base = scanBase(lines);
 	const pms = options?.pms ?? false;
 	const seed = options?.seed ?? null;
 	const branches = options?.branches ?? null;
@@ -113,7 +96,6 @@ export function parseBms(data: Uint8Array, options?: BmsParseOptions): BmsChart 
 	let randomValue: number | null = null;
 	let branchIndex = 0;
 
-	const lines = splitLines(text);
 	for (let i = 0; i < lines.length; i++) {
 		const lineNo = i + 1;
 		const line = lines[i].trim();
@@ -244,8 +226,8 @@ function splitLines(text: string): string[] {
 	return clean.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
 }
 
-function scanBase(text: string): number {
-	for (const raw of splitLines(text)) {
+function scanBase(lines: string[]): number {
+	for (const raw of lines) {
 		const parts = raw.trim().split(/\s+/);
 		if (parts.length === 2 && parts[0].toUpperCase() === "#BASE") {
 			if (!/^[+-]?\d+$/.test(parts[1]))
@@ -293,20 +275,23 @@ function addMessage(chart: BmsChart, measure: number, channel: string, payload: 
 	}
 	if (payload.length % 2 !== 0 || ![...payload].every(isIdChar))
 		throw new UrcError("syntax", lineNo, `malformed object list: "${payload}"`);
-	if (payload.length === 0)
+	if (payload.length === 0 || !isRelevantChannel(channel))
 		return;
 
+	const normalized = channel === "03" || chart.base === 36 ? payload.toUpperCase() : payload;
 	const ids: string[] = [];
-	for (let i = 0; i < payload.length; i += 2) {
-		const raw = payload.slice(i, i + 2);
-		ids.push(channel === "03" ? raw.toUpperCase() : normId(raw, chart.base));
-	}
+	for (let i = 0; i < normalized.length; i += 2)
+		ids.push(normalized.slice(i, i + 2));
 
 	let measureMap = chart.measures.get(measure);
 	if (!measureMap) {
 		measureMap = new Map();
 		chart.measures.set(measure, measureMap);
 	}
-	const existing = measureMap.get(channel);
-	measureMap.set(channel, existing ? overlay(existing, ids) : ids);
+	let channelLines = measureMap.get(channel);
+	if (!channelLines) {
+		channelLines = [];
+		measureMap.set(channel, channelLines);
+	}
+	channelLines.push(ids);
 }

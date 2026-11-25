@@ -19,4 +19,4 @@ class BmsChart:
 	stop_defs: dict[str, float] = field(default_factory=dict)
 	scroll_defs: dict[str, float] = field(default_factory=dict)
 	rates: dict[int, float] = field(default_factory=dict)
-	measures: dict[int, dict[str, list[str]]] = field(default_factory=dict)
+	measures: dict[int, dict[str, list[list[str]]]] = field(default_factory=dict)

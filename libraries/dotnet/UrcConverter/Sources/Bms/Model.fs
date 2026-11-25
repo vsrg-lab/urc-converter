@@ -16,5 +16,5 @@ module Model =
             StopDefs: Map<string, float>
             ScrollDefs: Map<string, float>
             Rates: Map<int, float>
-            Measures: Map<int, Map<string, string list>>
+            Measures: Map<int, Map<string, string list list>>
         }

@@ -113,19 +113,24 @@ export function buildTiming(
 
 	if (measureAnchorMs !== null) {
 		const anchor = roundMs(measureAnchorMs);
-		if (!emitted.some(entry => entry.time === anchor)) {
-			let active = emitted[0];
-			for (const entry of emitted)
-				if (entry.time < anchor)
-					active = entry;
-			emitted.push({
+		let low = 0;
+		let high = emitted.length;
+		while (low < high) {
+			const mid = (low + high) >>> 1;
+			if (emitted[mid].time < anchor)
+				low = mid + 1;
+			else
+				high = mid;
+		}
+		if (low === emitted.length || emitted[low].time !== anchor) {
+			const active = emitted[low > 0 ? low - 1 : 0];
+			emitted.splice(low, 0, {
 				time: anchor,
 				bpm: active.bpm,
 				multiplier: active.multiplier,
 				beats: active.beats,
 				noteValue: active.noteValue
 			});
-			emitted.sort((left, right) => left.time - right.time);
 		}
 	}
 
@@ -133,14 +138,14 @@ export function buildTiming(
 	for (const entry of emitted)
 		shifted.set(Math.max(entry.time - firstNoteTime, 0), entry);
 
-	const points: TimingPoint[] = [...shifted.entries()]
-		.sort((left, right) => left[0] - right[0])
-		.map(([time, entry]) => ({
+	const points: TimingPoint[] = [];
+	for (const [time, entry] of shifted.entries())
+		points.push({
 			timestampMs: time,
 			bpm: entry.bpm,
 			meter: { beats: entry.beats, noteValue: entry.noteValue },
 			multiplier: entry.multiplier === 1 ? null : entry.multiplier
-		}));
+		});
 
 	if (points[0].timestampMs !== 0)
 		points.unshift({
@@ -158,9 +163,23 @@ export function buildTiming(
  */
 export function checkHoldOverlap(notes: Note[]): void {
 	const openLanes = new Set<number>();
-	const ordered = [...notes].sort(
-		(left, right) => left.timestampMs - right.timestampMs || left.lane - right.lane
-	);
+	let isSorted = true;
+	for (let i = 1; i < notes.length; i++) {
+		const prev = notes[i - 1];
+		const curr = notes[i];
+		if (
+			prev.timestampMs > curr.timestampMs ||
+			(prev.timestampMs === curr.timestampMs && prev.lane > curr.lane)
+		) {
+			isSorted = false;
+			break;
+		}
+	}
+	const ordered = isSorted
+		? notes
+		: [...notes].sort(
+			(left, right) => left.timestampMs - right.timestampMs || left.lane - right.lane
+		);
 
 	for (const note of ordered)
 		if (note.type === "LS") {

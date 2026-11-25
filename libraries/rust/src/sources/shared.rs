@@ -1,6 +1,6 @@
 //! Shared merge and validation helpers for source format converters.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use crate::error::{Result, UrcError};
 use crate::model::{Meter, Note, NoteType, TimingPoint};
@@ -117,38 +117,29 @@ pub(crate) fn build_timing(
     }
 
     if let Some(anchor) = measure_anchor_ms.map(|value| round_ms(value as f64))
-        && !emitted.iter().any(|entry| entry.0 == anchor)
+        && let Err(idx) = emitted.binary_search_by_key(&anchor, |entry| entry.0)
     {
-        let mut active = emitted[0];
-        for entry in &emitted {
-            if entry.0 < anchor {
-                active = *entry;
-            }
-        }
-        emitted.push((anchor, active.1, active.2, active.3, active.4));
-        emitted.sort_by_key(|entry| entry.0);
+        let active = emitted[idx.saturating_sub(1)];
+        emitted.insert(idx, (anchor, active.1, active.2, active.3, active.4));
     }
 
-    let mut shifted: BTreeMap<i64, (f64, f64, u64, u64)> = BTreeMap::new();
+    let mut points: Vec<TimingPoint> = Vec::with_capacity(emitted.len());
     for (time, bpm, multiplier, beats, note_value) in emitted {
-        shifted.insert(
-            (time - first_note_time).max(0),
-            (bpm, multiplier, beats, note_value),
-        );
-    }
-
-    let mut points: Vec<TimingPoint> = shifted
-        .into_iter()
-        .map(|(time, (bpm, multiplier, beats, note_value))| TimingPoint {
-            timestamp_ms: time,
+        let shifted_time = (time - first_note_time).max(0);
+        let point = TimingPoint {
+            timestamp_ms: shifted_time,
             bpm,
-            meter: Meter {
-                beats,
-                note_value,
-            },
+            meter: Meter { beats, note_value },
             multiplier: (multiplier != 1.0).then_some(multiplier),
-        })
-        .collect();
+        };
+        if let Some(last) = points.last_mut()
+            && last.timestamp_ms == shifted_time
+        {
+            *last = point;
+        } else {
+            points.push(point);
+        }
+    }
 
     if let Some(first) = points.first()
         && first.timestamp_ms != 0
@@ -167,14 +158,9 @@ pub(crate) fn build_timing(
     Ok(points)
 }
 
-/// Rejects holds that overlap on the same lane (URC rule 21).
-pub(crate) fn check_hold_overlap(notes: &[Note]) -> Result<()> {
+fn scan_hold_overlap<'a>(notes: impl Iterator<Item = &'a Note>) -> Result<()> {
     let mut open_lanes: HashSet<u32> = HashSet::new();
-
-    let mut ordered: Vec<&Note> = notes.iter().collect();
-    ordered.sort_by_key(|note| (note.timestamp_ms, note.lane));
-
-    for note in ordered {
+    for note in notes {
         if matches!(note.note_type, NoteType::Ls) {
             if !open_lanes.insert(note.lane) {
                 return Err(UrcError::new(
@@ -187,6 +173,19 @@ pub(crate) fn check_hold_overlap(notes: &[Note]) -> Result<()> {
             open_lanes.remove(&note.lane);
         }
     }
-
     Ok(())
+}
+
+/// Rejects holds that overlap on the same lane (URC rule 21).
+pub(crate) fn check_hold_overlap(notes: &[Note]) -> Result<()> {
+    let is_sorted = notes
+        .windows(2)
+        .all(|pair| (pair[0].timestamp_ms, pair[0].lane) <= (pair[1].timestamp_ms, pair[1].lane));
+    if is_sorted {
+        return scan_hold_overlap(notes.iter());
+    }
+
+    let mut ordered: Vec<&Note> = notes.iter().collect();
+    ordered.sort_by_key(|note| (note.timestamp_ms, note.lane));
+    scan_hold_overlap(ordered.into_iter())
 }

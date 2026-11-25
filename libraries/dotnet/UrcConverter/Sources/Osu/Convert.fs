@@ -59,10 +59,10 @@ module Convert =
                     |> List.distinct
                     |> List.sort
 
-                let _, _, _, revBpms, revSvs =
+                let _, _, _, _, _, revBpms, revSvs =
                     allTimes
                     |> List.fold
-                        (fun (curBpm, curMeter, curSv, accBpms, accSvs) time ->
+                        (fun (curBpm, curMeter, curSv, lastBpm, lastSv, accBpms, accSvs) time ->
                             let tp = Map.tryFind time tpByTime
 
                             let nextSv =
@@ -77,14 +77,24 @@ module Convert =
                                 | None -> curBpm, curMeter
 
                             match nextBpm with
-                            | None -> nextBpm, nextMeter, nextSv, accBpms, accSvs
+                            | None -> nextBpm, nextMeter, nextSv, lastBpm, lastSv, accBpms, accSvs
                             | Some bpm ->
-                                nextBpm,
-                                nextMeter,
-                                nextSv,
-                                (time, bpm, nextMeter, 4) :: accBpms,
-                                (time, nextSv) :: accSvs)
-                        (None, 4, 1.0, [], [])
+                                let bpmState = Some(bpm, nextMeter)
+
+                                let nextAccBpms, nextLastBpm =
+                                    if bpmState <> lastBpm then
+                                        (time, bpm, nextMeter, 4) :: accBpms, bpmState
+                                    else
+                                        accBpms, lastBpm
+
+                                let nextAccSvs, nextLastSv =
+                                    if nextSv <> lastSv then
+                                        (time, nextSv) :: accSvs, nextSv
+                                    else
+                                        accSvs, lastSv
+
+                                nextBpm, nextMeter, nextSv, nextLastBpm, nextLastSv, nextAccBpms, nextAccSvs)
+                        (None, 4, 1.0, None, 1.0, [], [])
 
                 let anchorPoints =
                     tpByTime

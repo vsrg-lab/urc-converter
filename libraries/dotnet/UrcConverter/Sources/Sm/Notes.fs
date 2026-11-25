@@ -173,8 +173,8 @@ module internal Notes =
     let buildUrcNotes
         (timing: Timing)
         (notes: SmNote list)
-        (headTimes: Map<int, float>)
-        (tailTimes: Map<int, float>)
+        (headTimes: float[])
+        (tailTimes: float[])
         : Result<UrcNote list, UrcError> =
         let fakeRanges =
             timing.Fakes
@@ -186,11 +186,7 @@ module internal Notes =
             match rest with
             | [] -> Ok(List.rev acc)
             | note :: tail ->
-                let headMs =
-                    headTimes
-                    |> Map.tryFind index
-                    |> Option.defaultValue 0.0
-                    |> fun sec -> Shared.roundMs (sec * 1000.0)
+                let headMs = Shared.roundMs (headTimes[index] * 1000.0)
 
                 let inFake =
                     let noteRow = int64 note.Row
@@ -201,11 +197,7 @@ module internal Notes =
                 else
                     match note.Kind with
                     | Hold ->
-                        let tailMs =
-                            tailTimes
-                            |> Map.tryFind index
-                            |> Option.defaultValue 0.0
-                            |> fun sec -> Shared.roundMs (sec * 1000.0)
+                        let tailMs = Shared.roundMs (tailTimes[index] * 1000.0)
 
                         if tailMs < headMs then
                             Error(UrcError.syntax 1 $"hold ends before it starts: {tailMs} < {headMs}")
@@ -217,11 +209,7 @@ module internal Notes =
                                 (index + 1)
                                 ((tailMs, note.Track, NoteType.LE) :: (headMs, note.Track, NoteType.LS) :: acc)
                     | Roll ->
-                        let endMs =
-                            tailTimes
-                            |> Map.tryFind index
-                            |> Option.defaultValue 0.0
-                            |> fun sec -> Shared.roundMs (sec * 1000.0)
+                        let endMs = Shared.roundMs (tailTimes[index] * 1000.0)
 
                         let taps =
                             [

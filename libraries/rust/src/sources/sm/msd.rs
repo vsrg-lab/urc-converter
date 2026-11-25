@@ -4,26 +4,26 @@ use crate::error::{Result, UrcError};
 
 /// Splits a simfile into MSD values (`#TAG:param:...;`) following MsdFile.
 pub(crate) fn tokenize(text: &str) -> Vec<Vec<String>> {
-    let chars: Vec<char> = text.chars().collect();
+    let bytes = text.as_bytes();
     let mut values: Vec<Vec<String>> = Vec::new();
     let mut params: Vec<String> = Vec::new();
     let mut current = String::new();
-    let mut line = String::new();
+    let mut line_has_visible = false;
     let mut reading = false;
 
     let mut i = 0;
-    let n = chars.len();
+    let n = bytes.len();
     while i < n {
-        if i + 1 < n && chars[i] == '/' && chars[i + 1] == '/' {
-            while i < n && chars[i] != '\n' && chars[i] != '\r' {
+        let byte = bytes[i];
+        if byte == b'/' && i + 1 < n && bytes[i + 1] == b'/' {
+            while i < n && bytes[i] != b'\n' && bytes[i] != b'\r' {
                 i += 1;
             }
             continue;
         }
-        if reading && chars[i] == '#' {
-            if !line.trim_matches([' ', '\t']).is_empty() {
+        if reading && byte == b'#' {
+            if line_has_visible {
                 current.push('#');
-                line.push('#');
                 i += 1;
                 continue;
             }
@@ -31,52 +31,70 @@ pub(crate) fn tokenize(text: &str) -> Vec<Vec<String>> {
             values.push(params);
             params = Vec::new();
             current = String::new();
-            line = String::new();
+            line_has_visible = false;
             reading = false;
             continue;
         }
         if !reading {
-            if chars[i] == '#' {
+            if byte == b'#' {
                 reading = true;
-                line.clear();
-            } else if chars[i] != '\\' {
+                line_has_visible = false;
                 i += 1;
-                continue;
-            } else if i + 1 < n {
-                i += 2;
-                continue;
+            } else if byte == b'\\' && i + 1 < n {
+                i += 1;
+                if let Some(ch) = text[i..].chars().next() {
+                    i += ch.len_utf8();
+                }
+            } else {
+                i += 1;
             }
-            i += 1;
             continue;
         }
-        match chars[i] {
-            ':' => {
+        match byte {
+            b':' => {
                 params.push(std::mem::take(&mut current));
-                line.clear();
+                line_has_visible = false;
+                i += 1;
             }
-            ';' => {
+            b';' => {
                 params.push(std::mem::take(&mut current));
                 values.push(params);
                 params = Vec::new();
-                line.clear();
+                line_has_visible = false;
                 reading = false;
-            }
-            '\\' => {
                 i += 1;
-                if i < n {
-                    current.push(chars[i]);
-                    line.push(chars[i]);
+            }
+            b'\\' => {
+                i += 1;
+                if let Some(ch) = text[i..].chars().next() {
+                    current.push(ch);
+                    if ch == '\r' || ch == '\n' {
+                        line_has_visible = false;
+                    } else if ch != ' ' && ch != '\t' {
+                        line_has_visible = true;
+                    }
+                    i += ch.len_utf8();
                 }
             }
-            ch => {
-                current.push(ch);
-                line.push(ch);
+            _ => {
+                let start = i;
+                while i < n {
+                    let b = bytes[i];
+                    if matches!(b, b'#' | b':' | b';' | b'\\')
+                        || (b == b'/' && i + 1 < n && bytes[i + 1] == b'/')
+                    {
+                        break;
+                    }
+                    if b == b'\r' || b == b'\n' {
+                        line_has_visible = false;
+                    } else if b != b' ' && b != b'\t' {
+                        line_has_visible = true;
+                    }
+                    i += 1;
+                }
+                current.push_str(&text[start..i]);
             }
         }
-        if i < n && (chars[i] == '\r' || chars[i] == '\n') {
-            line.clear();
-        }
-        i += 1;
     }
 
     if reading {

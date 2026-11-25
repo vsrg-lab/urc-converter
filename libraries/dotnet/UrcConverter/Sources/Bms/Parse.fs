@@ -126,30 +126,14 @@ module Parse =
         | true, v when Double.IsFinite v -> Ok v
         | _ -> Error(UrcError.syntax lineNo $"invalid {name}: {value}")
 
-    let rec private gcd (a: int) (b: int) =
-        if b = 0 then a else gcd b (a % b)
-
-    let private overlay (existing: string list) (incoming: string list) : string list =
-        match existing, incoming with
-        | [], _ -> incoming
-        | _, [] -> existing
-        | _ ->
-            let a = List.toArray existing
-            let b = List.toArray incoming
-            let total = (a.Length / gcd a.Length b.Length) * b.Length
-            let stepA = total / a.Length
-            let stepB = total / b.Length
-            let merged = Array.create total "00"
-
-            for i = 0 to a.Length - 1 do
-                if a[i] <> "00" then
-                    merged[i * stepA] <- a[i]
-
-            for i = 0 to b.Length - 1 do
-                if b[i] <> "00" then
-                    merged[i * stepB] <- b[i]
-
-            Array.toList merged
+    let private isRelevantChannel (channel: string) =
+        if channel = "03" || channel = "08" || channel = "09" || channel = "SC" then
+            true
+        elif channel.Length <> 2 then
+            false
+        else
+            let c0, c1 = channel[0], channel[1]
+            (c0 = '1' || c0 = '2' || c0 = '5' || c0 = '6' || c0 = 'D' || c0 = 'E') && c1 >= '1' && c1 <= '9'
 
     type private LoopState =
         {
@@ -186,15 +170,16 @@ module Parse =
                 if payload.Length % 2 <> 0 || not (payload |> Seq.forall isIdChar) then
                     return! Error(UrcError.syntax lineNo $"malformed object list: \"{payload}\"")
 
-                if payload.Length = 0 then
+                if payload.Length = 0 || not (isRelevantChannel channel) then
                     return state
                 else
-                    let ids =
-                        [
-                            for i in 0 .. 2 .. payload.Length - 2 ->
-                                let sub = payload.Substring(i, 2)
-                                if channel = "03" then sub.ToUpperInvariant() else normId sub state.Chart.Base
-                        ]
+                    let normalized =
+                        if channel = "03" || state.Chart.Base = 36 then
+                            payload.ToUpperInvariant()
+                        else
+                            payload
+
+                    let ids = [ for i in 0 .. 2 .. normalized.Length - 2 -> normalized.Substring(i, 2) ]
 
                     let measureMap =
                         Map.tryFind measure state.MeasureChunks |> Option.defaultValue Map.empty
@@ -430,9 +415,7 @@ module Parse =
 
             let measures =
                 doneState.MeasureChunks
-                |> Map.map (fun _ channelMap ->
-                    channelMap
-                    |> Map.map (fun _ revChunks -> revChunks |> List.rev |> List.fold overlay []))
+                |> Map.map (fun _ channelMap -> channelMap |> Map.map (fun _ revChunks -> List.rev revChunks))
 
             return { doneState.Chart with Measures = measures }
         }

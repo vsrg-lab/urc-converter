@@ -20,9 +20,9 @@ def build(state: ParseState, end_line: int) -> Chart:
 
 	notes: list[Note] = []
 	open_ls: dict[int, int] = {}
-	ordered = sorted(state.notes, key=lambda raw: (raw.timestamp, raw.lane))
+	state.notes.sort(key=lambda raw: (raw.timestamp, raw.lane))
 
-	for raw in ordered:
+	for raw in state.notes:
 		if raw.timestamp < 0:
 			raise UrcError(rule(22), raw.line, "note timestamps must be non-negative")
 

@@ -165,6 +165,8 @@ def _resolve_timing(
 	all_times = sorted(set(tp_by_time) | set(sv_by_time))
 	bpm_points: list[tuple[int, float, int, int]] = []
 	sv_points: list[tuple[int, float]] = []
+	last_bpm: tuple[float, int] | None = None
+	last_sv = 1.0
 
 	if qua.bpm_does_not_affect_sv and all_times[0] > first_note_time:
 		init_mult = raw_sv if eff_bpm == base_bpm else raw_sv * (base_bpm / eff_bpm)
@@ -173,6 +175,8 @@ def _resolve_timing(
 		if init_mult != 1.0:
 			bpm_points.append((first_note_time, eff_bpm, beats, 4))
 			sv_points.append((first_note_time, init_mult))
+			last_bpm = (eff_bpm, beats)
+			last_sv = init_mult
 
 	for time in all_times:
 		tp = tp_by_time.get(time)
@@ -201,8 +205,13 @@ def _resolve_timing(
 		if eff_mult == 0.0:
 			eff_mult = 0.0
 
-		bpm_points.append((time, eff_bpm, beats, 4))
-		sv_points.append((time, eff_mult))
+		bpm_state = (eff_bpm, beats)
+		if bpm_state != last_bpm:
+			bpm_points.append((time, eff_bpm, beats, 4))
+			last_bpm = bpm_state
+		if eff_mult != last_sv:
+			sv_points.append((time, eff_mult))
+			last_sv = eff_mult
 
 	anchor_points = [(tp.start_time, abs(tp.bpm), tp.signature, 4) for tp in nonzero_tps]
 	return bpm_points, sv_points, anchor_points

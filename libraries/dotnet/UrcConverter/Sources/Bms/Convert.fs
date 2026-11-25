@@ -4,6 +4,7 @@ namespace UrcConverter.Sources.Bms
 module Convert =
 
     open System
+    open System.Collections.Generic
     open System.Globalization
     open FsToolkit.ErrorHandling
     open UrcConverter
@@ -13,6 +14,47 @@ module Convert =
 
     [<Literal>]
     let private MeasureUs = 240000000.0
+
+    let rec private gcd (a: int) (b: int) =
+        if b = 0 then a else gcd b (a % b)
+
+    let private channelSlots (lines: string list list) (keepZero: bool) : (float * string) list =
+        match lines with
+        | [ ids ] ->
+            let total = float (List.length ids)
+
+            ids
+            |> List.indexed
+            |> List.choose (fun (idx, obj) ->
+                if keepZero || obj <> "00" then
+                    Some(float idx / total, obj)
+                else
+                    None)
+        | _ ->
+            let slots = Dictionary<struct (int * int), string>()
+
+            for ids in lines do
+                let total = List.length ids
+                let mutable idx = 0
+
+                for obj in ids do
+                    if keepZero || obj <> "00" then
+                        let divisor = gcd idx total
+                        let key = struct (idx / divisor, total / divisor)
+
+                        if obj <> "00" then
+                            slots[key] <- obj
+                        elif not (slots.ContainsKey key) then
+                            slots[key] <- "00"
+
+                    idx <- idx + 1
+
+            slots
+            |> Seq.map (fun kv -> kv.Key, kv.Value)
+            |> Seq.toList
+            |> List.sortWith (fun (struct (a0, a1), _) (struct (b0, b1), _) ->
+                compare (int64 a0 * int64 b1) (int64 b0 * int64 a1))
+            |> List.map (fun (struct (num, den), obj) -> float num / float den, obj)
 
     let private hexBpm (obj: string) : Result<float, UrcError> =
         match Int32.TryParse(obj, NumberStyles.HexNumber, CultureInfo.InvariantCulture) with
@@ -47,7 +89,6 @@ module Convert =
             BpmPoints: (int * float * int * int) list
             SvPoints: (int * float) list
             Anchors: int list
-            Timed: Map<int, float>
         }
 
     /// Maps a BMS-family chart onto a URC chart.
@@ -77,118 +118,109 @@ module Convert =
                     LnChannels = Set.empty
                 }
 
-            let rec scanIds
+            let rec scanSlots
                 (measureBoundary: float)
                 (rate: float)
                 (channel: string)
-                (totalIds: float)
-                (idx: int)
+                (isSystem: bool)
+                (kind: ChannelKind option)
                 (iAcc: ScanAcc)
-                (remaining: string list)
+                (remaining: (float * string) list)
                 : Result<ScanAcc, UrcError> =
                 match remaining with
                 | [] -> Ok iAcc
-                | obj :: rest ->
-                    let y = measureBoundary + (float idx / totalIds) * rate
+                | (pos, obj) :: rest ->
+                    let y = measureBoundary + pos * rate
 
-                    if Set.contains channel systemChannels then
-                        if obj = "00" then
-                            scanIds measureBoundary rate channel totalIds (idx + 1) iAcc rest
-                        else
-                            match channel with
-                            | "03" ->
-                                match hexBpm obj with
-                                | Ok bpmVal ->
-                                    let nextAcc =
-                                        { iAcc with
-                                            Entries = (y, 0, EntryKind.Bpm bpmVal) :: iAcc.Entries
-                                        }
-
-                                    scanIds measureBoundary rate channel totalIds (idx + 1) nextAcc rest
-                                | Error err -> Error err
-                            | "08" ->
-                                match Map.tryFind obj chart.BpmDefs with
-                                | Some bpmVal when bpmVal <= 0.0 ->
-                                    Error(UrcError.syntax 1 $"non-positive #BPM{obj}: {bpmVal}")
-                                | Some bpmVal ->
-                                    let nextAcc =
-                                        { iAcc with
-                                            Entries = (y, 0, EntryKind.Bpm bpmVal) :: iAcc.Entries
-                                        }
-
-                                    scanIds measureBoundary rate channel totalIds (idx + 1) nextAcc rest
-                                | None -> Error(UrcError.syntax 1 $"undefined #BPM{obj}")
-                            | "09" ->
-                                match Map.tryFind obj chart.StopDefs with
-                                | Some stopVal ->
-                                    let nextAcc =
-                                        { iAcc with
-                                            Entries = (y, 1, EntryKind.Stop stopVal) :: iAcc.Entries
-                                        }
-
-                                    scanIds measureBoundary rate channel totalIds (idx + 1) nextAcc rest
-                                | None -> Error(UrcError.syntax 1 $"undefined #STOP{obj}")
-                            | _ ->
-                                match Map.tryFind obj chart.ScrollDefs with
-                                | Some scrollVal ->
-                                    let nextAcc =
-                                        { iAcc with
-                                            Entries = (y, 2, EntryKind.Scroll scrollVal) :: iAcc.Entries
-                                        }
-
-                                    scanIds measureBoundary rate channel totalIds (idx + 1) nextAcc rest
-                                | None -> Error(UrcError.syntax 1 $"undefined #SCROLL{obj}")
-                    else
-                        match channelKind channel with
-                        | None -> scanIds measureBoundary rate channel totalIds (idx + 1) iAcc rest
-                        | Some kind ->
-                            let lnChannels =
-                                if kind = ChannelKind.LongNote then
-                                    Set.add channel iAcc.LnChannels
-                                else
-                                    iAcc.LnChannels
-
-                            let used =
-                                if obj <> "00" then
-                                    Set.add (sideOf channel[0], channel[1]) iAcc.Used
-                                else
-                                    iAcc.Used
-
-                            if not (obj = "00" && kind <> ChannelKind.LongNote) then
+                    if isSystem then
+                        match channel with
+                        | "03" ->
+                            match hexBpm obj with
+                            | Ok bpmVal ->
                                 let nextAcc =
-                                    {
-                                        Entries = (y, 4, EntryKind.Object iAcc.ObjectCount) :: iAcc.Entries
-                                        Objects = (y, channel, obj) :: iAcc.Objects
-                                        ObjectCount = iAcc.ObjectCount + 1
-                                        Used = used
-                                        LnChannels = lnChannels
+                                    { iAcc with
+                                        Entries = (y, 0, EntryKind.Bpm bpmVal) :: iAcc.Entries
                                     }
 
-                                scanIds measureBoundary rate channel totalIds (idx + 1) nextAcc rest
+                                scanSlots measureBoundary rate channel isSystem kind nextAcc rest
+                            | Error err -> Error err
+                        | "08" ->
+                            match Map.tryFind obj chart.BpmDefs with
+                            | Some bpmVal when bpmVal <= 0.0 ->
+                                Error(UrcError.syntax 1 $"non-positive #BPM{obj}: {bpmVal}")
+                            | Some bpmVal ->
+                                let nextAcc =
+                                    { iAcc with
+                                        Entries = (y, 0, EntryKind.Bpm bpmVal) :: iAcc.Entries
+                                    }
+
+                                scanSlots measureBoundary rate channel isSystem kind nextAcc rest
+                            | None -> Error(UrcError.syntax 1 $"undefined #BPM{obj}")
+                        | "09" ->
+                            match Map.tryFind obj chart.StopDefs with
+                            | Some stopVal ->
+                                let nextAcc =
+                                    { iAcc with
+                                        Entries = (y, 1, EntryKind.Stop stopVal) :: iAcc.Entries
+                                    }
+
+                                scanSlots measureBoundary rate channel isSystem kind nextAcc rest
+                            | None -> Error(UrcError.syntax 1 $"undefined #STOP{obj}")
+                        | _ ->
+                            match Map.tryFind obj chart.ScrollDefs with
+                            | Some scrollVal ->
+                                let nextAcc =
+                                    { iAcc with
+                                        Entries = (y, 2, EntryKind.Scroll scrollVal) :: iAcc.Entries
+                                    }
+
+                                scanSlots measureBoundary rate channel isSystem kind nextAcc rest
+                            | None -> Error(UrcError.syntax 1 $"undefined #SCROLL{obj}")
+                    else
+                        let lnChannels =
+                            if kind = Some ChannelKind.LongNote then
+                                Set.add channel iAcc.LnChannels
                             else
-                                scanIds
-                                    measureBoundary
-                                    rate
-                                    channel
-                                    totalIds
-                                    (idx + 1)
-                                    { iAcc with Used = used; LnChannels = lnChannels }
-                                    rest
+                                iAcc.LnChannels
+
+                        let used =
+                            if obj <> "00" then
+                                Set.add (sideOf channel[0], channel[1]) iAcc.Used
+                            else
+                                iAcc.Used
+
+                        let nextAcc =
+                            {
+                                Entries = (y, 4, EntryKind.Object iAcc.ObjectCount) :: iAcc.Entries
+                                Objects = (y, channel, obj) :: iAcc.Objects
+                                ObjectCount = iAcc.ObjectCount + 1
+                                Used = used
+                                LnChannels = lnChannels
+                            }
+
+                        scanSlots measureBoundary rate channel isSystem kind nextAcc rest
 
             let rec scanChannels
                 (measureBoundary: float)
                 (rate: float)
                 (cAcc: ScanAcc)
-                (channels: (string * string list) list)
+                (channels: (string * string list list) list)
                 : Result<ScanAcc, UrcError> =
                 match channels with
                 | [] -> Ok cAcc
-                | (channel, ids) :: restChannels ->
-                    let totalIds = float (List.length ids)
+                | (channel, lines) :: restChannels ->
+                    let isSystem = Set.contains channel systemChannels
+                    let kind = if isSystem then None else channelKind channel
 
-                    match scanIds measureBoundary rate channel totalIds 0 cAcc ids with
-                    | Ok nextAcc -> scanChannels measureBoundary rate nextAcc restChannels
-                    | Error err -> Error err
+                    if not isSystem && Option.isNone kind then
+                        scanChannels measureBoundary rate cAcc restChannels
+                    else
+                        let slots =
+                            channelSlots lines (kind = Some ChannelKind.LongNote && chart.LnType = 2)
+
+                        match scanSlots measureBoundary rate channel isSystem kind cAcc slots with
+                        | Ok nextAcc -> scanChannels measureBoundary rate nextAcc restChannels
+                        | Error err -> Error err
 
             let rec scanMeasures (acc: ScanAcc) (m: int) : Result<ScanAcc, UrcError> =
                 if m > maxMeasure then
@@ -267,6 +299,8 @@ module Convert =
 
             let groupedEntries = sortedEntries |> List.groupBy (fun (y, _, _) -> y)
 
+            let timed = Array.zeroCreate<float> scanned.ObjectCount
+
             let initialTiming =
                 {
                     TimeUs = 0.0
@@ -277,7 +311,6 @@ module Convert =
                     BpmPoints = []
                     SvPoints = []
                     Anchors = []
-                    Timed = Map.empty
                 }
 
             let foldTimingGroup (state: TimingScanState) (y: float, group: (float * int * EntryKind) list) =
@@ -293,35 +326,28 @@ module Convert =
                     pendingStop
                     scroll
                     anchors
-                    timed
                     (events: (float * int * EntryKind) list)
                     =
                     match events with
-                    | [] -> nextBpm, nextBeats, pendingStop, scroll, anchors, timed
+                    | [] -> nextBpm, nextBeats, pendingStop, scroll, anchors
                     | (_, _, kind) :: rest ->
                         match kind with
                         | EntryKind.Bpm v ->
-                            foldGroupEvents (Some v) nextBeats pendingStop scroll anchors timed rest
+                            foldGroupEvents (Some v) nextBeats pendingStop scroll anchors rest
                         | EntryKind.Meter v ->
-                            foldGroupEvents nextBpm v pendingStop scroll anchors timed rest
+                            foldGroupEvents nextBpm v pendingStop scroll anchors rest
                         | EntryKind.Stop v ->
                             let stopTime =
                                 match nextBpm with
                                 | Some b -> MeasureUs * v / b
                                 | None -> 0.0
 
-                            foldGroupEvents nextBpm nextBeats (pendingStop + stopTime) scroll anchors timed rest
+                            foldGroupEvents nextBpm nextBeats (pendingStop + stopTime) scroll anchors rest
                         | EntryKind.Scroll v ->
-                            foldGroupEvents nextBpm nextBeats pendingStop (Some v) anchors timed rest
+                            foldGroupEvents nextBpm nextBeats pendingStop (Some v) anchors rest
                         | EntryKind.Object idx ->
-                            foldGroupEvents
-                                nextBpm
-                                nextBeats
-                                pendingStop
-                                scroll
-                                anchors
-                                (Map.add idx timeUs timed)
-                                rest
+                            timed[idx] <- timeUs
+                            foldGroupEvents nextBpm nextBeats pendingStop scroll anchors rest
                         | EntryKind.Anchor ->
                             foldGroupEvents
                                 nextBpm
@@ -329,17 +355,15 @@ module Convert =
                                 pendingStop
                                 scroll
                                 (Shared.roundMs (timeUs / 1000.0) :: anchors)
-                                timed
                                 rest
 
-                let nextBpm, nextBeats, pendingStop, scroll, nextAnchors, nextTimed =
+                let nextBpm, nextBeats, pendingStop, scroll, nextAnchors =
                     foldGroupEvents
                         state.CurrentBpm
                         state.CurrentBeats
                         0.0
                         None
                         state.Anchors
-                        state.Timed
                         group
 
                 let bpmPoints =
@@ -362,12 +386,11 @@ module Convert =
                     BpmPoints = bpmPoints
                     SvPoints = svPoints
                     Anchors = nextAnchors
-                    Timed = nextTimed
                 }
 
             let timingState = (initialTiming, groupedEntries) ||> List.fold foldTimingGroup
 
-            let! rawNotes = buildNotes chart mode scanned.Objects timingState.Timed
+            let! rawNotes = buildNotes chart mode scanned.Objects timed
 
             let firstNoteTime =
                 rawNotes

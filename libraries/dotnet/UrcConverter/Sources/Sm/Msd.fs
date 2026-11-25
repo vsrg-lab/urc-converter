@@ -4,6 +4,7 @@ module internal Msd =
 
     open System
     open System.Globalization
+    open System.Text
     open FsToolkit.ErrorHandling
     open UrcConverter
 
@@ -57,72 +58,93 @@ module internal Msd =
         )
         |> Result.map (List.choose id)
 
-    let private charsToString (revChars: char list) : string =
-        let arr = revChars |> List.rev |> Array.ofList
-        String(arr)
-
-    let private hasVisibleChars (revLine: char list) : bool =
-        revLine |> List.exists (fun c -> c <> ' ' && c <> '\t')
-
     /// Splits a simfile into MSD values (#TAG:param:...;) following MsdFile.
     let tokenize (text: string) : string list list =
         let n = text.Length
+        let values = ResizeArray<string list>()
+        let mutable revParams: string list = []
+        let current = StringBuilder()
+        let mutable lineHasVisible = false
+        let mutable reading = false
+        let mutable i = 0
 
-        let rec skipComment (i: int) =
-            if i < n && text[i] <> '\n' && text[i] <> '\r' then skipComment (i + 1) else i
+        while i < n do
+            let ch = text[i]
 
-        let rec loop
-            (i: int)
-            (reading: bool)
-            (revCurrent: char list)
-            (revLine: char list)
-            (revParams: string list)
-            (revValues: string list list)
-            : string list list =
-            if i >= n then
-                if reading then
-                    let completed = List.rev (charsToString revCurrent :: revParams)
-                    List.rev (completed :: revValues)
+            if ch = '/' && i + 1 < n && text[i + 1] = '/' then
+                while i < n && text[i] <> '\n' && text[i] <> '\r' do
+                    i <- i + 1
+            elif reading && ch = '#' then
+                if lineHasVisible then
+                    current.Append('#') |> ignore
+                    i <- i + 1
                 else
-                    List.rev revValues
-            elif i + 1 < n && text[i] = '/' && text[i + 1] = '/' then
-                loop (skipComment i) reading revCurrent revLine revParams revValues
-            elif reading && text[i] = '#' then
-                if hasVisibleChars revLine then
-                    loop (i + 1) true ('#' :: revCurrent) ('#' :: revLine) revParams revValues
-                else
-                    let trimmedParam = (charsToString revCurrent).TrimEnd(' ', '\t', '\r', '\n')
-                    let completed = List.rev (trimmedParam :: revParams)
-                    loop i false [] [] [] (completed :: revValues)
+                    let trimmedParam = current.ToString().TrimEnd(' ', '\t', '\r', '\n')
+                    values.Add(List.rev (trimmedParam :: revParams))
+                    revParams <- []
+                    current.Clear() |> ignore
+                    lineHasVisible <- false
+                    reading <- false
             elif not reading then
-                if text[i] = '#' then
-                    loop (i + 1) true [] [] [] revValues
-                elif text[i] <> '\\' then
-                    loop (i + 1) false revCurrent revLine revParams revValues
-                elif i + 1 < n then
-                    loop (i + 2) false revCurrent revLine revParams revValues
+                if ch = '#' then
+                    reading <- true
+                    lineHasVisible <- false
+                    i <- i + 1
+                elif ch = '\\' && i + 1 < n then
+                    i <- i + 2
                 else
-                    loop (i + 1) false revCurrent revLine revParams revValues
+                    i <- i + 1
+            elif ch = ':' then
+                revParams <- current.ToString() :: revParams
+                current.Clear() |> ignore
+                lineHasVisible <- false
+                i <- i + 1
+            elif ch = ';' then
+                values.Add(List.rev (current.ToString() :: revParams))
+                revParams <- []
+                current.Clear() |> ignore
+                lineHasVisible <- false
+                reading <- false
+                i <- i + 1
+            elif ch = '\\' then
+                i <- i + 1
+
+                if i < n then
+                    let escaped = text[i]
+                    current.Append(escaped) |> ignore
+
+                    if escaped = '\r' || escaped = '\n' then
+                        lineHasVisible <- false
+                    elif escaped <> ' ' && escaped <> '\t' then
+                        lineHasVisible <- true
+
+                    i <- i + 1
             else
-                let c = text[i]
+                let start = i
+                let mutable scanning = true
 
-                if c = ':' then
-                    let nextParams = charsToString revCurrent :: revParams
-                    loop (i + 1) true [] [] nextParams revValues
-                elif c = ';' then
-                    let completed = List.rev (charsToString revCurrent :: revParams)
-                    loop (i + 1) false [] [] [] (completed :: revValues)
-                elif c = '\\' then
-                    let nextIdx = i + 1
+                while i < n && scanning do
+                    let c = text[i]
 
-                    if nextIdx < n then
-                        let escaped = text[nextIdx]
-                        let nextLine = if escaped = '\r' || escaped = '\n' then [] else escaped :: revLine
-                        loop (nextIdx + 1) true (escaped :: revCurrent) nextLine revParams revValues
+                    if
+                        c = '#'
+                        || c = ':'
+                        || c = ';'
+                        || c = '\\'
+                        || (c = '/' && i + 1 < n && text[i + 1] = '/')
+                    then
+                        scanning <- false
                     else
-                        loop (nextIdx + 1) true revCurrent revLine revParams revValues
-                else
-                    let nextLine = if c = '\r' || c = '\n' then [] else c :: revLine
-                    loop (i + 1) true (c :: revCurrent) nextLine revParams revValues
+                        if c = '\r' || c = '\n' then
+                            lineHasVisible <- false
+                        elif c <> ' ' && c <> '\t' then
+                            lineHasVisible <- true
 
-        loop 0 false [] [] [] []
+                        i <- i + 1
+
+                current.Append(text, start, i - start) |> ignore
+
+        if reading then
+            values.Add(List.rev (current.ToString() :: revParams))
+
+        Seq.toList values

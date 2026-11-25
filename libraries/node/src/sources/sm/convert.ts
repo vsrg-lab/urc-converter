@@ -75,15 +75,23 @@ function convertChart(simfile: SmFile, chart: SmChart): Chart {
 		entries.push([rows(beat), 5, "timesig", [numerator, denominator] as [number, number]]);
 	for (const [beat, ratio] of timing.scrolls)
 		entries.push([rows(beat), 6, "scroll", ratio]);
+	if (notes.length > 0) {
+		let firstNoteRow = notes[0].row;
+		for (let i = 1; i < notes.length; i++)
+			if (notes[i].row < firstNoteRow)
+				firstNoteRow = notes[i].row;
+		const floorMeasure = Math.floor(Math.max(firstNoteRow, 0) / MEASURE_ROWS) * MEASURE_ROWS;
+		entries.push([floorMeasure, 2, "anchor", null]);
+		if (firstNoteRow > floorMeasure)
+			entries.push([floorMeasure + MEASURE_ROWS, 2, "anchor", null]);
+	} else
+		entries.push([0, 2, "anchor", null]);
 	let maxRow = 0;
 	for (const entry of entries)
 		if (entry[0] > maxRow)
 			maxRow = entry[0];
-	const anchorLimit = maxRow + MEASURE_ROWS;
-	for (let row = 0; row < anchorLimit; row += MEASURE_ROWS)
-		entries.push([row, 2, "anchor", null]);
 	for (const [, dest] of intervals)
-		if (dest <= anchorLimit)
+		if (dest <= maxRow)
 			entries.push([dest, 0, "warp_end", null]);
 
 	const headTimes: number[] = new Array<number>(notes.length).fill(0);

@@ -171,22 +171,25 @@ module internal Shared =
                     before @ { active with Time = anchor } :: after
                 | _ -> emitted
 
-            let shifted =
-                emitted
-                |> List.map (fun point ->
-                    max (point.Time - firstNoteTime) 0, (point.Bpm, point.Multiplier, point.Beats, point.NoteValue))
-                |> Map.ofList
-
             let points =
-                [
-                    for time, (bpm, multiplier, beats, noteValue) in Map.toList shifted ->
-                        {
-                            TimestampMs = time
-                            Bpm = bpm
-                            Meter = { Beats = beats; NoteValue = noteValue }
-                            Multiplier = if multiplier = 1.0 then None else Some multiplier
-                        }
-                ]
+                emitted
+                |> List.fold
+                    (fun (acc: TimingPoint list) point ->
+                        let time = max (point.Time - firstNoteTime) 0
+
+                        let tp: TimingPoint =
+                            {
+                                TimestampMs = time
+                                Bpm = point.Bpm
+                                Meter = { Beats = point.Beats; NoteValue = point.NoteValue }
+                                Multiplier = if point.Multiplier = 1.0 then None else Some point.Multiplier
+                            }
+
+                        match acc with
+                        | head :: tail when head.TimestampMs = time -> tp :: tail
+                        | _ -> tp :: acc)
+                    []
+                |> List.rev
 
             match points with
             | first :: _ when first.TimestampMs <> 0 ->
@@ -202,6 +205,15 @@ module internal Shared =
             | _ -> Ok points
 
     let checkHoldOverlap (notes: Note list) : Result<unit, UrcError> =
+        let rec isSorted (rest: Note list) =
+            match rest with
+            | []
+            | [ _ ] -> true
+            | first :: (second :: _ as tail) ->
+                (first.TimestampMs < second.TimestampMs
+                 || (first.TimestampMs = second.TimestampMs && first.Lane <= second.Lane))
+                && isSorted tail
+
         let rec loop (openLanes: Set<int>) (rest: Note list) =
             match rest with
             | [] -> Ok()
@@ -213,8 +225,13 @@ module internal Shared =
                 | NoteType.LE -> loop (Set.remove note.Lane openLanes) tail
                 | _ -> loop openLanes tail
 
-        notes
-        |> List.indexed
-        |> List.sortBy (fun (index, note) -> note.TimestampMs, note.Lane, index)
-        |> List.map snd
-        |> loop Set.empty
+        let ordered =
+            if isSorted notes then
+                notes
+            else
+                notes
+                |> List.indexed
+                |> List.sortBy (fun (index, note) -> note.TimestampMs, note.Lane, index)
+                |> List.map snd
+
+        loop Set.empty ordered

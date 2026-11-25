@@ -38,8 +38,8 @@ def parse_bms(
 	branches: list[int] | None = None,
 ) -> BmsChart:
 	"""Parse BMS-family bytes into a source model."""
-	text = _decode(data)
-	return _parse(text, _scan_base(text), pms, seed, branches)
+	lines = _lines(_decode(data))
+	return _parse(lines, _scan_base(lines), pms, seed, branches)
 
 
 def _norm_id(token: str, base: int) -> str:
@@ -54,7 +54,7 @@ def _split_command(head: str) -> tuple[str, str]:
 
 
 def _parse(
-	text: str,
+	lines: list[str],
 	base: int,
 	pms: bool,
 	seed: int | None,
@@ -66,7 +66,7 @@ def _parse(
 	random_value: int | None = None
 	branch_index = 0
 
-	for line_no, raw in enumerate(_lines(text), start=1):
+	for line_no, raw in enumerate(lines, start=1):
 		line = raw.strip()
 		if not line.startswith("#"):
 			continue
@@ -167,24 +167,14 @@ def _parse(
 	return chart
 
 
-def _overlay(existing: list[str], incoming: list[str]) -> list[str]:
-	if not existing:
-		return list(incoming)
-	if not incoming:
-		return existing
-	len_a = len(existing)
-	len_b = len(incoming)
-	total = math.lcm(len_a, len_b)
-	step_a = total // len_a
-	step_b = total // len_b
-	merged = ["00"] * total
-	for idx, obj in enumerate(existing):
-		if obj != "00":
-			merged[idx * step_a] = obj
-	for idx, obj in enumerate(incoming):
-		if obj != "00":
-			merged[idx * step_b] = obj
-	return merged
+def _is_relevant_channel(channel: str) -> bool:
+	if channel in ("03", "08", "09", "SC"):
+		return True
+	return (
+		len(channel) == 2
+		and channel[0] in ("1", "2", "5", "6", "D", "E")
+		and "1" <= channel[1] <= "9"
+	)
 
 
 def _add_message(
@@ -198,19 +188,14 @@ def _add_message(
 		return
 	if len(payload) % 2 != 0 or not all(_is_id_char(char) for char in payload):
 		raise UrcError("syntax", line_no, f"malformed object list: {payload!r}")
-	if not payload:
+	if not payload or not _is_relevant_channel(channel):
 		return
-	ids = [
-		_norm_id(payload[index : index + 2], chart.base)
-		if channel != "03"
-		else payload[index : index + 2].upper()
-		for index in range(0, len(payload), 2)
-	]
-	measure_map = chart.measures.setdefault(measure, {})
-	if channel in measure_map:
-		measure_map[channel] = _overlay(measure_map[channel], ids)
+	if channel == "03" or chart.base == 36:
+		normalized = payload.upper()
+		ids = [normalized[index : index + 2] for index in range(0, len(normalized), 2)]
 	else:
-		measure_map[channel] = ids
+		ids = [payload[index : index + 2] for index in range(0, len(payload), 2)]
+	chart.measures.setdefault(measure, {}).setdefault(channel, []).append(ids)
 
 
 def _decode(data: bytes) -> str:
@@ -224,8 +209,8 @@ def _decode(data: bytes) -> str:
 	raise UrcError("syntax", 1, "undecodable bytes: expected UTF-8 or Shift_JIS")
 
 
-def _scan_base(text: str) -> int:
-	for raw in _lines(text):
+def _scan_base(lines: list[str]) -> int:
+	for raw in lines:
 		parts = raw.strip().split()
 		if len(parts) == 2 and parts[0].upper() == "#BASE":
 			try:

@@ -187,6 +187,9 @@ function resolveTiming(
 	const allTimes = [...new Set([...tpByTime.keys(), ...svByTime.keys()])].sort((a, b) => a - b);
 	const bpmPoints: Array<[number, number, number, number]> = [];
 	const svPoints: Array<[number, number]> = [];
+	let lastBpm: number | null = null;
+	let lastBeats = 4;
+	let lastSv = 1;
 
 	if (qua.bpmDoesNotAffectSv && allTimes[0] > firstNoteTime) {
 		let initMult = effBpm === baseBpm ? rawSv : rawSv * (baseBpm / effBpm);
@@ -195,6 +198,9 @@ function resolveTiming(
 		if (initMult !== 1) {
 			bpmPoints.push([firstNoteTime, effBpm, beats, 4]);
 			svPoints.push([firstNoteTime, initMult]);
+			lastBpm = effBpm;
+			lastBeats = beats;
+			lastSv = initMult;
 		}
 	}
 
@@ -223,8 +229,15 @@ function resolveTiming(
 		if (effMult === 0)
 			effMult = 0;
 
-		bpmPoints.push([time, effBpm, beats, 4]);
-		svPoints.push([time, effMult]);
+		if (effBpm !== lastBpm || beats !== lastBeats) {
+			bpmPoints.push([time, effBpm, beats, 4]);
+			lastBpm = effBpm;
+			lastBeats = beats;
+		}
+		if (effMult !== lastSv) {
+			svPoints.push([time, effMult]);
+			lastSv = effMult;
+		}
 	}
 
 	const anchorPoints: Array<[number, number, number, number]> = nonzeroTps.map(

@@ -39,7 +39,7 @@ function convertChart(file: OjnFile, difficulty: OjnDifficulty): Chart {
 	const holds = new Map<number, number>();
 
 	for (const event of events) {
-		while (event.measure > measure) {
+		if (event.measure > measure) {
 			if (fraction - pointer < 0)
 				throw new UrcError("syntax", event.offset, "measure fraction cuts before the current position");
 			time += (MEASURE_MS * (fraction - pointer)) / bpm;
@@ -52,6 +52,12 @@ function convertChart(file: OjnFile, difficulty: OjnDifficulty): Chart {
 			measure++;
 			fraction = 1;
 			pointer = 0;
+			const gap = event.measure - measure;
+			if (gap > 0) {
+				time += (MEASURE_MS * gap) / bpm;
+				measure = event.measure;
+				anchors.push(roundMs(time));
+			}
 		}
 		time += (MEASURE_MS * (event.position - pointer)) / bpm;
 		pointer = event.position;

@@ -19,6 +19,53 @@ const TYPE_ORDER: Record<NoteType, number> = { N: 0, LS: 1, LE: 2, M: 3, F: 4 };
 
 const SYSTEM_CHANNELS = new Set(["02", "03", "08", "09", "SC"]);
 
+function gcd(a: number, b: number): number {
+	let x = a;
+	let y = b;
+	while (y !== 0) {
+		const tmp = x % y;
+		x = y;
+		y = tmp;
+	}
+	return x;
+}
+
+function channelSlots(lines: string[][], keepZero: boolean): Array<[number, string]> {
+	if (lines.length === 1) {
+		const ids = lines[0];
+		const total = ids.length;
+		const result: Array<[number, string]> = [];
+		for (let idx = 0; idx < total; idx++) {
+			const obj = ids[idx];
+			if (keepZero || obj !== "00")
+				result.push([idx / total, obj]);
+		}
+		return result;
+	}
+
+	const slots = new Map<string, [number, number, string]>();
+	for (const ids of lines) {
+		const total = ids.length;
+		for (let idx = 0; idx < total; idx++) {
+			const obj = ids[idx];
+			if (obj === "00" && !keepZero)
+				continue;
+			const divisor = gcd(idx, total);
+			const num = idx / divisor;
+			const den = total / divisor;
+			const key = `${num}/${den}`;
+			if (obj !== "00")
+				slots.set(key, [num, den, obj]);
+			else if (!slots.has(key))
+				slots.set(key, [num, den, "00"]);
+		}
+	}
+
+	return [...slots.values()]
+		.sort((a, b) => a[0] * b[1] - b[0] * a[1])
+		.map(([num, den, obj]): [number, string] => [num / den, obj]);
+}
+
 /**
  * Maps a BMS-family chart onto a URC chart.
  */
@@ -55,14 +102,15 @@ export function convertBms(chart: BmsChart): Chart {
 			continue;
 
 		const sortedChannels = [...measureMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-		for (const [channel, ids] of sortedChannels)
-			for (let idx = 0; idx < ids.length; idx++) {
-				const obj = ids[idx];
-				const y = boundaries[m] + (idx / ids.length) * rate;
+		for (const [channel, lines] of sortedChannels) {
+			const isSystem = SYSTEM_CHANNELS.has(channel);
+			const kind = isSystem ? null : channelKind(channel);
+			if (!isSystem && kind === null)
+				continue;
+			for (const [pos, obj] of channelSlots(lines, kind === "ln" && chart.lntype === 2)) {
+				const y = boundaries[m] + pos * rate;
 
-				if (SYSTEM_CHANNELS.has(channel)) {
-					if (obj === "00")
-						continue;
+				if (isSystem) {
 					if (channel === "03")
 						entries.push([y, 0, "bpm", hexBpm(obj)]);
 					else if (channel === "08") {
@@ -86,18 +134,14 @@ export function convertBms(chart: BmsChart): Chart {
 					continue;
 				}
 
-				const kind = channelKind(channel);
-				if (kind === null)
-					continue;
 				if (kind === "ln")
 					lnChannels.add(channel);
 				if (obj !== "00")
 					used.add(`${SIDE_OF[channel[0]]}:${channel[1]}`);
-				if (obj === "00" && kind !== "ln")
-					continue;
 				objects.push([y, channel, obj]);
 				entries.push([y, 4, "object", objects.length - 1]);
 			}
+		}
 	}
 
 	if (chart.lntype === 2 && lnChannels.size > 0)

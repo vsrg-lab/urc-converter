@@ -36,7 +36,7 @@ def _convert_chart(file: OjnFile, difficulty: OjnDifficulty) -> Chart:
 	holds: dict[int, int] = {}
 
 	for event in events:
-		while event.measure > measure:
+		if event.measure > measure:
 			if fraction - pointer < 0:
 				raise UrcError(
 					"syntax", event.offset, "measure fraction cuts before the current position"
@@ -50,6 +50,11 @@ def _convert_chart(file: OjnFile, difficulty: OjnDifficulty) -> Chart:
 			measure += 1
 			fraction = 1.0
 			pointer = 0.0
+			gap = event.measure - measure
+			if gap > 0:
+				time += (_MEASURE_MS * gap) / bpm
+				measure = event.measure
+				anchors.append(round_ms(time))
 		time += (_MEASURE_MS * (event.position - pointer)) / bpm
 		pointer = event.position
 
